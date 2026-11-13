@@ -1,0 +1,716 @@
+{
+  "id": "wYye8Ql1R7JbpRbU",
+  "name": "WhatsApp_AI_Doctor_Appointment_Assistant",
+  "description": null,
+  "active": true,
+  "activeVersionId": "a49bf6c8-36cc-46a8-9668-92d97b357553",
+  "createdAt": "2026-10-31T09:06:30.121Z",
+  "updatedAt": "2026-11-05T16:13:41.274Z",
+  "isArchived": false,
+  "versionId": "a49bf6c8-36cc-46a8-9668-92d97b357553",
+  "versionCounter": 85,
+  "sourceWorkflowId": null,
+  "triggerCount": 2,
+  "nodes": [
+    {
+      "id": "b278d20d-ac85-45eb-9874-b73c8819af7b",
+      "name": "Meta Webhook Verification (GET)1",
+      "webhookId": "whatsapp-verify-channel",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        -160
+      ],
+      "parameters": {
+        "path": "whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "468afa4f-7b20-480d-af87-f23af0947cf0",
+      "name": "Return Challenge Token1",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        176,
+        -160
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.challenge'] }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "0d175524-053c-4241-94dd-f8b4b1608580",
+      "name": "WhatsApp Inbound Message (POST)1",
+      "webhookId": "whatsapp-inbound-channel",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        80
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "0f6def8b-53f6-4119-92cc-9c9ec8fd2449",
+      "name": "Acknowledge Meta 200 OK1",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        176,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\":\"success\"}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "87f6e4dd-9da9-4dbe-ac92-04a0eee9558c",
+      "name": "Extract Patient Message & Info1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        176,
+        192
+      ],
+      "parameters": {
+        "jsCode": "const body = $json.body;\nif (!body) return [];\n\nif (body.sendByApi === true) return [];\n\nif (body.typeWebhook === 'incomingMessageReceived' || body.typeWebhook === 'outgoingMessageReceived') {\n  const senderData = body.senderData || {};\n  const messageData = body.messageData || {};\n\n  const chatId = senderData.chatId || body.chatId || '';\n  if (chatId.includes('status@broadcast') || chatId.endsWith('@g.us')) return [];\n\n  let text = '';\n  if (messageData.typeMessage === 'textMessage') {\n    text = (messageData.textMessageData && messageData.textMessageData.textMessage) || '';\n  } else if (messageData.typeMessage === 'extendedTextMessage') {\n    text = (messageData.extendedTextMessageData && messageData.extendedTextMessageData.text) || '';\n  }\n\n  if (!text) return [];\n\n  const rawPhone = senderData.sender || chatId;\n  const cleanPhone = rawPhone.replace('@c.us', '').replace('@s.whatsapp.net', '');\n\n  return [{\n    json: {\n      sender_phone: cleanPhone,\n      chat_id: chatId,\n      patient_name: senderData.senderName || senderData.chatName || 'Sagar Patil',\n      user_message: text,\n      message_id: body.idMessage,\n      timestamp: body.timestamp\n    }\n  }];\n}\n\nreturn [];"
+      }
+    },
+    {
+      "id": "parse-ai-booking-action",
+      "name": "Parse AI Booking Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        192
+      ],
+      "parameters": {
+        "jsCode": "\nconst userRaw = ($json.user_message || '').trim();\nconst userMsg = userRaw.toLowerCase();\nconst senderInfo = $json;\nconst chatId = senderInfo.chat_id || 'default';\n\n// Session tracking\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.userSessions) {\n  staticData.userSessions = {};\n}\n\nlet session = staticData.userSessions[chatId] || {\n  specialty: null,\n  area: null,\n  patientName: null,\n  date: null,\n  time: null\n};\n\nfunction parseSlotToIST(dateStr, timeStr) {\n  const nowUtc = new Date();\n  const istOffsetMs = 5.5 * 60 * 60 * 1000;\n  const nowIst = new Date(nowUtc.getTime() + istOffsetMs);\n\n  let targetYear = nowIst.getUTCFullYear();\n  let targetMonth = nowIst.getUTCMonth();\n  let targetDate = nowIst.getUTCDate() + 1; // default tomorrow\n\n  const dLower = (dateStr || 'tomorrow').toLowerCase();\n  if (dLower.includes('today') || dLower.includes('aaj')) {\n    targetDate = nowIst.getUTCDate();\n  } else if (dLower.includes('tomorrow') || dLower.includes('tommorrow') || dLower.includes('tommorow') || dLower.includes('tomorow') || dLower.includes('tomrw') || dLower.includes('tmrw') || dLower.includes('kal') || dLower.includes('kl')) {\n    targetDate = nowIst.getUTCDate() + 1;\n  } else {\n    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];\n    for (let i = 0; i < days.length; i++) {\n      if (dLower.includes(days[i])) {\n        const currentDay = nowIst.getUTCDay();\n        let diff = (i - currentDay + 7) % 7;\n        if (diff === 0) diff = 7;\n        targetDate = nowIst.getUTCDate() + diff;\n        break;\n      }\n    }\n  }\n\n  let hour = 11;\n  let minute = 30;\n  if (timeStr) {\n    const t = timeStr.toLowerCase().trim();\n    const isPm = t.includes('pm') || t.includes('bje') || t.includes('baje');\n    const isAm = t.includes('am');\n    const m = t.match(/(\\d{1,2})(?::(\\d{2}))?/);\n    if (m) {\n      let h = parseInt(m[1], 10);\n      let min = m[2] ? parseInt(m[2], 10) : 0;\n      if (isPm && h < 12) h += 12;\n      if (isAm && h === 12) h = 0;\n      if (!isPm && !isAm) {\n        if (h >= 1 && h <= 7) h += 12;\n      }\n      hour = h;\n      minute = min;\n    }\n  }\n\n  const target = new Date(Date.UTC(targetYear, targetMonth, targetDate, hour, minute));\n  const y = target.getUTCFullYear();\n  const m = String(target.getUTCMonth() + 1).padStart(2, '0');\n  const d = String(target.getUTCDate()).padStart(2, '0');\n  const hh = String(target.getUTCHours()).padStart(2, '0');\n  const mm = String(target.getUTCMinutes()).padStart(2, '0');\n\n  const startISO = `${y}-${m}-${d}T${hh}:${mm}:00+05:30`;\n\n  const endTarget = new Date(target.getTime() + 30 * 60 * 1000);\n  const ey = endTarget.getUTCFullYear();\n  const em = String(endTarget.getUTCMonth() + 1).padStart(2, '0');\n  const ed = String(endTarget.getUTCDate()).padStart(2, '0');\n  const ehh = String(endTarget.getUTCHours()).padStart(2, '0');\n  const emm = String(endTarget.getUTCMinutes()).padStart(2, '0');\n\n  const endISO = `${ey}-${em}-${ed}T${ehh}:${emm}:00+05:30`;\n  return { startISO, endISO, hour: hh, minute: mm, dateStr: `${y}-${m}-${d}` };\n}\n\n\n\n// 1. Specialty Map\nconst specMap = {\n  '1': 'Cardiology',\n  'cardiology': 'Cardiology',\n  'cardio': 'Cardiology',\n  'heart': 'Cardiology',\n  'dil': 'Cardiology',\n  '2': 'Dermatology',\n  'dermatology': 'Dermatology',\n  'skin': 'Dermatology',\n  'hair': 'Dermatology',\n  'chamdi': 'Dermatology',\n  'baal': 'Dermatology',\n  '3': 'General Physician',\n  'general physician': 'General Physician',\n  'physician': 'General Physician',\n  'fever': 'General Physician',\n  'bukhar': 'General Physician',\n  'cold': 'General Physician',\n  'sardi': 'General Physician',\n  'cough': 'General Physician',\n  'khasi': 'General Physician',\n  'checkup': 'General Physician',\n  '4': 'Orthopedics',\n  'orthopedics': 'Orthopedics',\n  'ortho': 'Orthopedics',\n  'bone': 'Orthopedics',\n  'joint': 'Orthopedics',\n  'haddi': 'Orthopedics',\n  'ghutna': 'Orthopedics',\n  'knee': 'Orthopedics',\n  '5': 'Pediatrics',\n  'pediatrics': 'Pediatrics',\n  'child': 'Pediatrics',\n  'pediatric': 'Pediatrics',\n  'bacha': 'Pediatrics',\n  'baby': 'Pediatrics',\n  '6': 'Gynecology',\n  'gynecology': 'Gynecology',\n  'gynec': 'Gynecology',\n  'women': 'Gynecology',\n  'maternity': 'Gynecology',\n  'lady': 'Gynecology',\n  'ladies': 'Gynecology',\n  'pregnancy': 'Gynecology',\n  '7': 'Dentistry',\n  'dentistry': 'Dentistry',\n  'dental': 'Dentistry',\n  'teeth': 'Dentistry',\n  'dentist': 'Dentistry',\n  'daant': 'Dentistry',\n  '8': 'ENT',\n  'ent': 'ENT',\n  'ear': 'ENT',\n  'nose': 'ENT',\n  'throat': 'ENT',\n  'kaan': 'ENT',\n  'naak': 'ENT',\n  'gala': 'ENT'\n};\n\n// 2. Area Map\nconst areaNumMap = {\n  '1': 'Vesu',\n  '2': 'Piplod',\n  '3': 'Adajan',\n  '4': 'Pal',\n  '5': 'Athwa',\n  '6': 'Varachha',\n  '7': 'Katargam'\n};\n\nconst areaMap = {\n  'vesu': 'Vesu',\n  'piplod': 'Piplod',\n  'adajan': 'Adajan',\n  'pal': 'Pal',\n  'athwa': 'Athwa',\n  'varachha': 'Varachha',\n  'katargam': 'Katargam'\n};\n\nconst db = {\n  \"Cardiology\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Multispeciality Hospital (Practo)\",\n      \"doc\": \"Dr. Hardik Patel (Visiting Interventional Cardiologist)\",\n      \"address\": \"2nd Floor, Western Business Park, Opp. S.D. Jain School, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Sanjeevani+Multispeciality+Hospital+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Apex Heart & Vascular Care\",\n      \"doc\": \"Dr. Hemant Desai\",\n      \"address\": \"Opp. Valentine Cinema, Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Valentine+Cinema+Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Surat Heart & Multispecialty Hospital\",\n      \"doc\": \"Dr. Rajesh Mehta\",\n      \"address\": \"Prime Arcade, Anand Mahal Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Prime+Arcade+Anand+Mahal+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Heart & Medical Clinic\",\n      \"doc\": \"Dr. Tushar Shah\",\n      \"address\": \"Galaxy Circle, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Galaxy+Circle+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Heart First Hospital (Practo)\",\n      \"doc\": \"Dr. Abhyankar Atul Damodar\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Heart+First+Hospital+Athwalines+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Diamond City Heart Hospital\",\n      \"doc\": \"Dr. Ketan Parikh\",\n      \"address\": \"Near Mini Bazar, Varachha Road, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Mangadh+Chowk+Varachha+Road+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Heart Center\",\n      \"doc\": \"Dr. Arvind Patel\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  },\n  \"Dermatology\": {\n    \"Vesu\": {\n      \"clinic\": \"True-Smile Dental & Skin Clinic (Practo)\",\n      \"doc\": \"Dr. Pinak S. Deshpande\",\n      \"address\": \"VIP Road, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=True+Smile+Dental+Skin+Clinic+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"DermaGlow Skin & Laser Clinic\",\n      \"doc\": \"Dr. Pooja Singhal\",\n      \"address\": \"Near Big Bazaar, Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Big+Bazaar+Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Derma Wellness & Skin Hospital\",\n      \"doc\": \"Dr. Sneha Verma\",\n      \"address\": \"Opp. Navyug College, Rander Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Navyug+College+Rander+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Skin Care Clinic\",\n      \"doc\": \"Dr. Ritu Shah\",\n      \"address\": \"Green City Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Green+City+Road+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Skin Clinic\",\n      \"doc\": \"Dr. Jigar Modi\",\n      \"address\": \"Athwa Lines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Lines+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Viradiya Skin Care & Cosmetic Clinic (Practo)\",\n      \"doc\": \"Dr. Hitesh Viradiya\",\n      \"address\": \"Near Mini Bazar, Varachha Main Road, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Viradiya+Skin+Care+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Skin Care Center\",\n      \"doc\": \"Dr. Mansi Patel\",\n      \"address\": \"Laxmi Enclave, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Laxmi+Enclave+Katargam+Surat\"\n    }\n  },\n  \"General Physician\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Multispeciality Hospital OPD (Practo)\",\n      \"doc\": \"Dr. R.C. Shah\",\n      \"address\": \"2nd Floor, Western Business Park, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Healthcare OPD\",\n      \"doc\": \"Dr. Amit Trivedi\",\n      \"address\": \"Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Health Clinic\",\n      \"doc\": \"Dr. Sanjay Patel\",\n      \"address\": \"Gujarat Gas Circle, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gujarat+Gas+Circle+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Family OPD\",\n      \"doc\": \"Dr. Keyur Shah\",\n      \"address\": \"Pal RTO Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Pal+RTO+Road+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Medical Clinic\",\n      \"doc\": \"Dr. Pratik Desai\",\n      \"address\": \"Athwa Gate, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Gate+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Multi-Specialty Clinic\",\n      \"doc\": \"Dr. Ramesh Savani\",\n      \"address\": \"Hirabaug Circle, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Hirabaug+Circle+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Family Clinic\",\n      \"doc\": \"Dr. Hitesh Gondaliya\",\n      \"address\": \"Dhanmora Complex, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dhanmora+Complex+Katargam+Surat\"\n    }\n  },\n  \"Orthopedics\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Orthopedic & Joint Center (Practo)\",\n      \"doc\": \"Dr. Jenil K. Gandhi\",\n      \"address\": \"Western Business Park, Vesu Char Rasta, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Bone & Joint Care\",\n      \"doc\": \"Dr. Manish Patel\",\n      \"address\": \"Kargil Chowk, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Kargil+Chowk+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Surat Ortho Hospital\",\n      \"doc\": \"Dr. Sandip Shah\",\n      \"address\": \"LP Savani Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=LP+Savani+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Orthopedic Clinic\",\n      \"doc\": \"Dr. Nirav Shah\",\n      \"address\": \"Near Pal Lake, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Pal+Lake+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Bone Clinic\",\n      \"doc\": \"Dr. Bharat Desai\",\n      \"address\": \"Athwa Gate, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Gate+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Fracture & Joint Clinic\",\n      \"doc\": \"Dr. Dipak Patel\",\n      \"address\": \"Laxmi Hotel Circle, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Laxmi+Hotel+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Trauma & Ortho Care\",\n      \"doc\": \"Dr. Hiren Vaghani\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  },\n  \"Pediatrics\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Pediatrics OPD (Practo)\",\n      \"doc\": \"Dr. Nirmal Ajmera\",\n      \"address\": \"Western Business Park, Vesu Char Rasta, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Children Clinic\",\n      \"doc\": \"Dr. Bhavna Patel\",\n      \"address\": \"Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Child Care Clinic\",\n      \"doc\": \"Dr. Mayank Patel\",\n      \"address\": \"Anand Mahal Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Anand+Mahal+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Kids Health Care\",\n      \"doc\": \"Dr. Chetan Shah\",\n      \"address\": \"Green City Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Green+City+Road+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Pediatric Clinic\",\n      \"doc\": \"Dr. Shrenik Shah\",\n      \"address\": \"Athwa Lines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Lines+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Children Hospital\",\n      \"doc\": \"Dr. Mehul Patel\",\n      \"address\": \"Near Mini Bazar, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Mini+Bazar+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Child Clinic\",\n      \"doc\": \"Dr. Piyush Savani\",\n      \"address\": \"Dhanmora Complex, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dhanmora+Complex+Katargam+Surat\"\n    }\n  },\n  \"Gynecology\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Maternity & Infertility Clinic (Practo)\",\n      \"doc\": \"Dr. Saumya J. Gandhi\",\n      \"address\": \"Western Business Park, Vesu Char Rasta, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Women & Maternity Care\",\n      \"doc\": \"Dr. Neha Trivedi\",\n      \"address\": \"Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Maternity & Nursing Home\",\n      \"doc\": \"Dr. Aarti Shah\",\n      \"address\": \"LP Savani Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=LP+Savani+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Maternity & Women Hospital\",\n      \"doc\": \"Dr. Rekha Patel\",\n      \"address\": \"Near Pal RTO, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Pal+RTO+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Birla Fertility & IVF (Practo)\",\n      \"doc\": \"Dr. Aashita Jain\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Birla+Fertility+IVF+Athwa+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Women Care Hospital\",\n      \"doc\": \"Dr. Alpana Patel\",\n      \"address\": \"Baroda Prestige, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Baroda+Prestige+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Maternity Hospital\",\n      \"doc\": \"Dr. Geeta Gondaliya\",\n      \"address\": \"Laxmi Enclave, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Laxmi+Enclave+Katargam+Surat\"\n    }\n  },\n  \"Dentistry\": {\n    \"Vesu\": {\n      \"clinic\": \"Summirow Dental Hospital (Practo)\",\n      \"doc\": \"Dr. Ushma K Kakkad\",\n      \"address\": \"VIP Road, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Summirow+Dental+Hospital+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Modern Dental Clinic\",\n      \"doc\": \"Dr. Rohit Trivedi\",\n      \"address\": \"Near Valentine Cinema, Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Valentine+Cinema+Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Dental Care Center\",\n      \"doc\": \"Dr. Jaimin Patel\",\n      \"address\": \"Honey Park Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Honey+Park+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Smile Dental Clinic\",\n      \"doc\": \"Dr. Mita Shah\",\n      \"address\": \"Galaxy Circle, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Galaxy+Circle+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Kapadia Dental Clinic (Practo)\",\n      \"doc\": \"Dr. Pinak J Kapadia\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Kapadia+Dental+Clinic+Athwa+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Dental Hospital\",\n      \"doc\": \"Dr. Kalpesh Vaghani\",\n      \"address\": \"Hirabaug Circle, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Hirabaug+Circle+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Dental Center\",\n      \"doc\": \"Dr. Alpesh Patel\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  },\n  \"ENT\": {\n    \"Vesu\": {\n      \"clinic\": \"Noble Multi-Speciality Hospital (Practo)\",\n      \"doc\": \"Dr. Manit M Mandal\",\n      \"address\": \"VIP Road, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Noble+Multi+Speciality+Hospital+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod ENT Care Center\",\n      \"doc\": \"Dr. Alok Trivedi\",\n      \"address\": \"Kargil Chowk, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Kargil+Chowk+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan ENT Hospital\",\n      \"doc\": \"Dr. Vivek Mehta\",\n      \"address\": \"Honey Park Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Honey+Park+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal ENT & Hearing Clinic\",\n      \"doc\": \"Dr. Rakesh Shah\",\n      \"address\": \"Green City Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Green+City+Road+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Auora ENT Hospital & Clinic (Practo)\",\n      \"doc\": \"Dr. Jayesh Patel\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Auora+ENT+Hospital+Athwa+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha ENT & Micro Surgery Clinic\",\n      \"doc\": \"Dr. Ashok Kakadiya\",\n      \"address\": \"Poddar Arcade, Opp. Railway Station, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Poddar+Arcade+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam ENT Clinic\",\n      \"doc\": \"Dr. Nilesh Dhola\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  }\n};\nlet replyText = \"\";\nlet isBooking = false;\nlet bookingData = null;\n\n// Clean token split for whole-word matching\nconst words = userMsg.split(/[^a-zA-Z0-9]+/);\n\n// Helper function for name extraction\nfunction extractName(raw) {\n  const m1 = raw.match(/([A-Za-z]+(?:\\s+[A-Za-z]+)*)\\s+(?:k|ke)\\s+naam\\s+se/i);\n  if (m1) return m1[1].trim().replace(/^(?:.*\\s+)?(?:ki|ko|ka|se|hai|for)\\s+/i, '');\n\n  const m2 = raw.match(/(?:patient|for|name(?:\\s+is)?[:\\s]+)\\s*([A-Za-z]+(?:\\s+[A-Za-z]+)?)/i);\n  if (m2) return m2[1].trim();\n\n  // If message is comma separated: \"Sagar Patil, Tomorrow at 2:00 PM\"\n  if (raw.includes(',')) {\n    const part = raw.split(',')[0].trim();\n    if (part.split(' ').length <= 3 && !part.toLowerCase().includes('tomorrow') && !part.toLowerCase().includes('today')) {\n      return part;\n    }\n  }\n\n  // If user simply typed their name: \"Neha Patil\" or \"Rahul\"\n  const clean = raw.trim();\n  if (/^[A-Za-z\\.\\s]{2,30}$/.test(clean)) {\n    const lower = clean.toLowerCase();\n    const reserved = ['hi', 'hello', 'hey', 'start', 'help', 'menu', 'yes', 'confirm', 'vesu', 'pal', 'adajan', 'piplod', 'athwa', 'varachha', 'katargam', 'tomorrow', 'today'];\n    if (!reserved.includes(lower) && !specMap[lower]) {\n      return clean;\n    }\n  }\n\n  return null;\n}\n\n// -------------------------------------------------------------\n// CHECK COMMANDS: RESET / GREETING\n// -------------------------------------------------------------\nconst greetings = ['hi', 'hello', 'hey', 'start', 'help', 'menu', 'hii', 'restart'];\nif (greetings.includes(userMsg)) {\n  session = {\n    specialty: null,\n    area: null,\n    patientName: null,\n    date: null,\n    time: null\n  };\n\n  replyText = `Hello! Welcome to Surat Healthcare Assistant. \ud83d\ude0a\\nHow can we help you today?\\n\\n*STEP 1: Select Your Medical Specialist*\\n1\ufe0f\u20e3 *Cardiology* (Heart Care)\\n2\ufe0f\u20e3 *Dermatology* (Skin & Hair)\\n3\ufe0f\u20e3 *General Physician* (Fever, Cold, Checkup)\\n4\ufe0f\u20e3 *Orthopedics* (Bone & Joint Care)\\n5\ufe0f\u20e3 *Pediatrics* (Child Specialist)\\n6\ufe0f\u20e3 *Gynecology* (Women\u2019s Health)\\n7\ufe0f\u20e3 *Dentistry* (Dental & Teeth)\\n8\ufe0f\u20e3 *ENT* (Ear, Nose & Throat)\\n\\n\ud83d\udc49 *Reply with the number (1-8)* or specialty name!`;\n}\n// -------------------------------------------------------------\n// CHECK CONFIRMATION (YES / CONFIRM)\n// -------------------------------------------------------------\nelse if (userMsg === 'yes' || userMsg === 'confirm' || userMsg.includes('yes') || userMsg.includes('confirm')) {\n  // If user included date or time in this message, update session\n  if (userMsg.includes('tomorrow') || userMsg.includes('tommorrow') || userMsg.includes('tomorow') || userMsg.includes('tomrw') || userMsg.includes('tmrw') || words.includes('kl') || words.includes('kal')) {\n    session.date = 'Tomorrow';\n  } else if (userMsg.includes('today') || words.includes('aaj')) {\n    session.date = 'Today';\n  }\n  const quickTime = userRaw.match(/(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|bje|baje|o'clock)?)/i);\n  if (quickTime && (userMsg.includes('pm') || userMsg.includes('am') || userMsg.includes('bje') || userMsg.includes('baje') || userMsg.includes(':'))) {\n    session.time = quickTime[0].trim();\n  }\n\n  if (session.specialty && session.area && (session.patientName || session.time)) {\n    isBooking = true;\n    const finalName = session.patientName || senderInfo.patient_name || 'Patient';\n    const finalSpec = session.specialty || 'General Physician';\n    const finalArea = session.area || 'Surat';\n    const specClinics = db[finalSpec] || db['General Physician'];\n    const clinic = (specClinics && specClinics[finalArea]) || (db['General Physician'] && db['General Physician'][finalArea]) || {\n      doc: 'Doctor',\n      clinic: 'Surat Healthcare Clinic',\n      address: `${finalArea}, Surat`,\n      map: ''\n    };\n\n    const slot = parseSlotToIST(session.date, session.time);\n    const startISO = slot.startISO;\n    const endISO = slot.endISO;\n\n    const finalWhen = (session.date ? session.date + ' ' : 'Tomorrow ') + (session.time ? 'at ' + session.time : 'at 11:30 AM');\n    const bookingId = 'APT-' + Math.random().toString(36).substring(2, 8).toUpperCase();\n\n    bookingData = {\n      booking_id: bookingId,\n      summary: `Doctor Appointment - ${finalSpec} (${finalName})`,\n      description: `Patient: ${finalName}\\nPhone: ${senderInfo.sender_phone}\\nDoctor: ${clinic.doc}\\nClinic: ${clinic.clinic}\\nAddress: ${clinic.address}\\nSpecialty: ${finalSpec}\\nArea: ${finalArea}\\nScheduled Time: ${finalWhen}\\nBooked via Surat WhatsApp Healthcare Assistant`,\n      start: startISO,\n      end: endISO,\n      location: `${finalArea}, Surat`,\n      patient_name: finalName,\n      doctor: clinic.doc,\n      clinic: clinic.clinic,\n      address: clinic.address,\n      map: clinic.map || '',\n      area: finalArea,\n      specialty: finalSpec,\n      phone: senderInfo.sender_phone,\n      scheduled_time: finalWhen,\n      date_str: session.date || 'Tomorrow',\n      time_str: session.time || '11:30 AM'\n    };\n\n    replyText = `\ud83c\udf89 *APPOINTMENT CONFIRMED!*\\n\\n\u2022 *Appointment ID:* ${bookingId}\\n\u2022 *Patient Name:* ${finalName}\\n\u2022 *Specialty:* ${finalSpec}\\n\u2022 *Area:* ${finalArea}\\n\u2022 *Doctor:* ${clinic.doc}\\n\u2022 *Clinic:* ${clinic.clinic}\\n\u2022 *Address:* ${clinic.address}\\n\u2022 *Date & Time:* ${finalWhen} (IST)\\n\u2022 *Status:* Scheduled on Doctor Google Calendar\\n\u2022 *Phone:* ${senderInfo.sender_phone}\\n\\nThank you for choosing Surat Healthcare Assistant. Please arrive 10 minutes prior to your slot! \ud83e\ude7a`;\n\n    // Reset session after successful booking\n    session = { specialty: null, area: null, patientName: null, date: null, time: null };\n  } else {\n    replyText = `To confirm your appointment, we still need your details! Please reply *Hi* to restart or provide your preferred specialty and area.`;\n  }\n}\n// -------------------------------------------------------------\n// ANALYZE & EXTRACT DETAILS ACCORDING TO RULE SET\n// -------------------------------------------------------------\nelse {\n  // 1. Extract Area (Only match 1-7 if specialty is already chosen!)\n  let detectedArea = null;\n  if (/^[1-7]$/.test(userMsg)) {\n    if (session.specialty && !session.area) {\n      detectedArea = areaNumMap[userMsg];\n    }\n  }\n  if (!detectedArea) {\n    for (const [k, v] of Object.entries(areaMap)) {\n      if (words.includes(k)) {\n        detectedArea = v;\n        break;\n      }\n    }\n  }\n  if (detectedArea) session.area = detectedArea;\n\n  // 2. Extract Specialty\n  let detectedSpec = null;\n  if (/^[1-8]$/.test(userMsg)) {\n    if (!session.specialty) {\n      detectedSpec = specMap[userMsg];\n    }\n  } else {\n    for (const [kw, spec] of Object.entries(specMap)) {\n      if (!/^\\d$/.test(kw) && words.includes(kw)) {\n        detectedSpec = spec;\n        break;\n      }\n    }\n  }\n  if (detectedSpec) session.specialty = detectedSpec;\n\n  // 3. Extract Name\n  const detectedName = extractName(userRaw);\n  if (detectedName) session.patientName = detectedName;\n\n  // 4. Extract Date\n  if (userMsg.includes('tomorrow') || userMsg.includes('tommorrow') || userMsg.includes('tomorow') || userMsg.includes('tomrw') || userMsg.includes('tmrw') || words.includes('kl') || words.includes('kal')) {\n    session.date = 'Tomorrow';\n  } else if (userMsg.includes('today') || words.includes('aaj')) {\n    session.date = 'Today';\n  } else {\n    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];\n    for (const d of days) {\n      if (userMsg.includes(d)) {\n        session.date = d.charAt(0).toUpperCase() + d.slice(1);\n        break;\n      }\n    }\n  }\n\n  // 5. Extract Time\n  const timeMatch = userRaw.match(/(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|bje|baje|o'clock)?)/i);\n  if (timeMatch && (userMsg.includes('pm') || userMsg.includes('am') || userMsg.includes('bje') || userMsg.includes('baje') || userMsg.includes(':'))) {\n    session.time = timeMatch[0].trim();\n  }\n\n  // -----------------------------------------------------------\n  // DECISION TREE (Check what is left: Specialty -> Area -> Name/Time)\n  // -----------------------------------------------------------\n\n  // A. Missing Specialty?\n  if (!session.specialty) {\n    const ack = (session.patientName || session.time) ? `Got your request${session.patientName ? ` for *${session.patientName}*` : ''}${session.time ? ` at *${session.date || ''} ${session.time}*` : ''}.\\n\\n` : '';\n    replyText = `${ack}Please select the *Medical Specialist* you need:\\n\\n1\ufe0f\u20e3 *Cardiology* (Heart Care)\\n2\ufe0f\u20e3 *Dermatology* (Skin & Hair)\\n3\ufe0f\u20e3 *General Physician* (Fever, Cold, Checkup)\\n4\ufe0f\u20e3 *Orthopedics* (Bone & Joint Care)\\n5\ufe0f\u20e3 *Pediatrics* (Child Specialist)\\n6\ufe0f\u20e3 *Gynecology* (Women\u2019s Health)\\n7\ufe0f\u20e3 *Dentistry* (Dental & Teeth)\\n8\ufe0f\u20e3 *ENT* (Ear, Nose & Throat)\\n\\n\ud83d\udc49 *Reply with the number (1-8)* or specialty name!`;\n  }\n  // B. Missing Area?\n  else if (!session.area) {\n    replyText = `Great! You selected *${session.specialty}*.\\n\\n*STEP 2: Select Your Preferred Area in Surat*\\n\ud83d\udccd 1. *Vesu*\\n\ud83d\udccd 2. *Piplod*\\n\ud83d\udccd 3. *Adajan*\\n\ud83d\udccd 4. *Pal*\\n\ud83d\udccd 5. *Athwa*\\n\ud83d\udccd 6. *Varachha*\\n\ud83d\udccd 7. *Katargam*\\n\\n\ud83d\udc49 *Reply with the area name (e.g. Vesu, Pal) or number (1-7)*!`;\n  }\n  // C. Has Specialty & Area, check if Name or Date/Time is missing!\n  else if (!session.patientName || !session.date || !session.time) {\n    const spec = session.specialty;\n    const specClinics = db[spec] || db['General Physician'];\n    const clinic = specClinics[session.area] || db['General Physician'][session.area];\n\n    // Subcase C1: Both Name AND Time/Date are missing -> show full clinic card\n    if (!session.patientName && (!session.date || !session.time)) {\n      replyText = `*STEP 3: Available Doctor & Clinic in ${session.area}*\\n\\n\ud83d\udc68\u200d\u2695\ufe0f *Doctor:* ${clinic.doc}\\n\ud83c\udfe5 *Clinic:* ${clinic.clinic}\\n\ud83d\udccd *Address:* ${clinic.address}\\n\ud83d\uddfa\ufe0f *Maps:* ${clinic.map}\\n\\n\ud83d\udd52 *Working Hours:* Mon\u2013Sat, 10:00 AM \u2013 6:00 PM (Lunch: 1:00 PM \u2013 2:00 PM)\\n\\n\ud83d\udca1 *Suggested Next Slots:*\\n\u2022 Tomorrow at 10:30 AM\\n\u2022 Tomorrow at 11:30 AM\\n\u2022 Tomorrow at 3:00 PM\\n\u2022 Tomorrow at 4:30 PM\\n\\n\ud83d\udc49 *Please reply with your *Patient Full Name* and *Preferred Date & Time**\\n*(Example: \"Sagar Patil, Tomorrow at 11:30 AM\")*`;\n    }\n    // Subcase C2: User ALREADY provided Date/Time, but Patient Name is still missing!\n    else if (!session.patientName) {\n      const when = (session.date ? session.date + ' ' : '') + session.time;\n      replyText = `Got your requested slot (*${when}*) for *${clinic.doc}* at *${clinic.clinic}*! \ud83d\udd52\\n\\n\ud83d\udc49 *Please reply with the Patient's Full Name* to finalize your appointment!\\n*(e.g., \"Sagar Patil\" or \"Rahul Patel\")*`;\n    }\n    // Subcase C3: User ALREADY provided Patient Name, but Date/Time is still missing!\n    else {\n      replyText = `Got it, appointment for *${session.patientName}* with *${clinic.doc}*! \ud83d\udc64\\n\\n\ud83d\udca1 *Suggested Next Slots:*\\n\u2022 Tomorrow at 10:30 AM\\n\u2022 Tomorrow at 11:30 AM\\n\u2022 Tomorrow at 3:00 PM\\n\u2022 Tomorrow at 4:30 PM\\n\\n\ud83d\udc49 *Please reply with your Preferred Date & Time* (e.g., \"Tomorrow at 4:00 PM\")!`;\n    }\n  }\n  // D. Everything present! Show Booking Summary Card (Step 4)\n  else {\n    const spec = session.specialty;\n    const specClinics = db[spec] || db['General Physician'];\n    const clinic = specClinics[session.area] || db['General Physician'][session.area];\n    const when = `${session.date} at ${session.time}`;\n\n    replyText = `*STEP 4: Review Your Booking Summary* \ud83d\udccb\\n\\n\u2022 *Patient Name:* ${session.patientName}\\n\u2022 *Specialty:* ${session.specialty}\\n\u2022 *Doctor:* ${clinic.doc}\\n\u2022 *Clinic:* ${clinic.clinic}\\n\u2022 *Address:* ${clinic.address}\\n\u2022 *Scheduled Time:* ${when}\\n\u2022 *Phone:* ${senderInfo.sender_phone}\\n\\n\ud83d\udc49 *Reply YES or CONFIRM to finalize and schedule in Google Calendar!*`;\n  }\n}\n\n// Save session\nstaticData.userSessions[chatId] = session;\n\nreturn [{\n  json: {\n    has_booking: isBooking,\n    booking_data: bookingData,\n    chat_id: senderInfo.chat_id,\n    patient_name: session.patientName || senderInfo.patient_name,\n    sender_phone: senderInfo.sender_phone,\n    reply_message: replyText\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-has-booking",
+      "name": "Is Booking Present?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        820,
+        192
+      ],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.has_booking }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "google-calendar-create-event",
+      "name": "Create Event in Google Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "continueOnFail": true,
+      "position": [
+        1020,
+        100
+      ],
+      "parameters": {
+        "operation": "create",
+        "calendar": {
+          "__rl": true,
+          "value": "sagarlr1998@gmail.com",
+          "mode": "list"
+        },
+        "start": "={{ $('Parse AI Booking Action').item.json.booking_data.start }}",
+        "end": "={{ $('Parse AI Booking Action').item.json.booking_data.end }}",
+        "additionalFields": {
+          "summary": "={{ $('Parse AI Booking Action').item.json.booking_data.summary }}",
+          "description": "={{ $('Parse AI Booking Action').item.json.booking_data.description }}",
+          "location": "={{ $('Parse AI Booking Action').item.json.booking_data.location || 'Surat' }}"
+        }
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "B3OUkyVGiIbOvVnF",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "id": "a3b19cc9-6c0b-4d4d-b33e-3376b38340ab",
+      "name": "Send WhatsApp Reply to Patient1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        192
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.green-api.com/waInstance710722787826/sendMessage/10afa0b67fc44b0e80ca789b6aa26a3b43067a0af6f445b291",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chatId\": \"{{ $('Parse AI Booking Action').item.json.chat_id }}\",\n  \"message\": {{ JSON.stringify($('Parse AI Booking Action').item.json.reply_message) }}\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "save-appointment-neon-db",
+      "name": "Save Appointment to Neon DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "continueOnFail": true,
+      "position": [
+        1140,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO appointments (\n  id, booking_id, patient_name, phone, specialty, area, doctor, \n  clinic_name, address, scheduled_time, date_str, time_str, \n  status, source_channel, map_url, google_calendar_event_id, created_at, updated_at\n) VALUES (\n  gen_random_uuid(),\n  '{{ $('Parse AI Booking Action').item.json.booking_data.booking_id }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.patient_name.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.phone }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.specialty }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.area }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.doctor.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.clinic.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.address.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.scheduled_time }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.date_str }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.time_str }}',\n  'CONFIRMED',\n  'whatsapp',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.map }}',\n  '{{ $json.id || '' }}',\n  NOW(),\n  NOW()\n);\n\nINSERT INTO surat_appointments (\n  id, patient_name, phone, specialty, area, doctor, \n  clinic_name, address, scheduled_time, date_str, time_str, \n  status, source_channel, map_url, created_at\n) VALUES (\n  '{{ $('Parse AI Booking Action').item.json.booking_data.booking_id }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.patient_name.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.phone }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.specialty }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.area }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.doctor.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.clinic.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.address.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.scheduled_time }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.date_str }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.time_str }}',\n  'confirmed',\n  'whatsapp',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.map }}',\n  NOW()\n) ON CONFLICT (id) DO NOTHING;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "dl1zfn9AxvHZ9VcX",
+          "name": "Neon PostgreSQL neondb"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Meta Webhook Verification (GET)1": {
+      "main": [
+        [
+          {
+            "node": "Return Challenge Token1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Inbound Message (POST)1": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge Meta 200 OK1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Patient Message & Info1": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Booking Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Booking Action": {
+      "main": [
+        [
+          {
+            "node": "Is Booking Present?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Booking Present?": {
+      "main": [
+        [
+          {
+            "node": "Create Event in Google Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send WhatsApp Reply to Patient1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Event in Google Calendar": {
+      "main": [
+        [
+          {
+            "node": "Save Appointment to Neon DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acknowledge Meta 200 OK1": {
+      "main": [
+        [
+          {
+            "node": "Extract Patient Message & Info1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Appointment to Neon DB": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Reply to Patient1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "nodeGroups": [],
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {
+    "global": {
+      "userSessions": {
+        "919016848201@c.us": {
+          "specialty": "General Physician",
+          "area": "Adajan",
+          "patientName": "arjun prjapat",
+          "date": "Tomorrow",
+          "time": "3:00 PM"
+        },
+        "919820270265-1394016899@g.us": {
+          "step": "AWAIT_SPECIALTY",
+          "specialty": null,
+          "area": null,
+          "patientName": null,
+          "appointmentTime": null
+        },
+        "919265601592@c.us": {
+          "step": "AWAIT_SPECIALTY",
+          "specialty": null,
+          "area": null,
+          "patientName": null,
+          "appointmentTime": null
+        },
+        "918238523599@c.us": {
+          "specialty": null,
+          "area": null,
+          "patientName": null,
+          "date": null,
+          "time": null
+        },
+        "919595342580@c.us": {
+          "specialty": null,
+          "area": null,
+          "patientName": "Ohhho",
+          "date": "Today",
+          "time": "69"
+        },
+        "919726504295@c.us": {
+          "specialty": null,
+          "area": null,
+          "patientName": null,
+          "date": null,
+          "time": null
+        },
+        "919106588782@c.us": {
+          "specialty": null,
+          "area": null,
+          "patientName": null,
+          "date": null,
+          "time": null
+        },
+        "918128642703@c.us": {
+          "specialty": null,
+          "area": null,
+          "patientName": "mssge kr  gari aalavar",
+          "date": null,
+          "time": null
+        }
+      }
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [],
+  "shared": [
+    {
+      "role": "workflow:owner",
+      "workflowId": "wYye8Ql1R7JbpRbU",
+      "projectId": "F17UgWXZzF7ChMOm",
+      "project": {
+        "id": "F17UgWXZzF7ChMOm",
+        "name": "Bharat Prajapat <bharat.p2311@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "f0b75621-99f2-4c7b-9ff7-94e36dd5aafa",
+        "createdAt": "2026-10-30T07:21:51.582Z",
+        "updatedAt": "2026-10-30T08:45:00.824Z"
+      },
+      "createdAt": "2026-10-31T09:06:30.121Z",
+      "updatedAt": "2026-10-31T09:06:30.121Z"
+    }
+  ],
+  "activeVersion": {
+    "versionId": "a49bf6c8-36cc-46a8-9668-92d97b357553",
+    "workflowId": "wYye8Ql1R7JbpRbU",
+    "nodes": [
+      {
+        "id": "b278d20d-ac85-45eb-9874-b73c8819af7b",
+        "name": "Meta Webhook Verification (GET)1",
+        "webhookId": "whatsapp-verify-channel",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -48,
+          -160
+        ],
+        "parameters": {
+          "path": "whatsapp",
+          "responseMode": "responseNode",
+          "options": {}
+        }
+      },
+      {
+        "id": "468afa4f-7b20-480d-af87-f23af0947cf0",
+        "name": "Return Challenge Token1",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [
+          176,
+          -160
+        ],
+        "parameters": {
+          "respondWith": "text",
+          "responseBody": "={{ $json.query['hub.challenge'] }}",
+          "options": {
+            "responseCode": 200
+          }
+        }
+      },
+      {
+        "id": "0d175524-053c-4241-94dd-f8b4b1608580",
+        "name": "WhatsApp Inbound Message (POST)1",
+        "webhookId": "whatsapp-inbound-channel",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -64,
+          80
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "whatsapp",
+          "responseMode": "responseNode",
+          "options": {}
+        }
+      },
+      {
+        "id": "0f6def8b-53f6-4119-92cc-9c9ec8fd2449",
+        "name": "Acknowledge Meta 200 OK1",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [
+          176,
+          0
+        ],
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "{\"status\":\"success\"}",
+          "options": {
+            "responseCode": 200
+          }
+        }
+      },
+      {
+        "id": "87f6e4dd-9da9-4dbe-ac92-04a0eee9558c",
+        "name": "Extract Patient Message & Info1",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          176,
+          192
+        ],
+        "parameters": {
+          "jsCode": "const body = $json.body;\nif (!body) return [];\n\nif (body.sendByApi === true) return [];\n\nif (body.typeWebhook === 'incomingMessageReceived' || body.typeWebhook === 'outgoingMessageReceived') {\n  const senderData = body.senderData || {};\n  const messageData = body.messageData || {};\n\n  const chatId = senderData.chatId || body.chatId || '';\n  if (chatId.includes('status@broadcast') || chatId.endsWith('@g.us')) return [];\n\n  let text = '';\n  if (messageData.typeMessage === 'textMessage') {\n    text = (messageData.textMessageData && messageData.textMessageData.textMessage) || '';\n  } else if (messageData.typeMessage === 'extendedTextMessage') {\n    text = (messageData.extendedTextMessageData && messageData.extendedTextMessageData.text) || '';\n  }\n\n  if (!text) return [];\n\n  const rawPhone = senderData.sender || chatId;\n  const cleanPhone = rawPhone.replace('@c.us', '').replace('@s.whatsapp.net', '');\n\n  return [{\n    json: {\n      sender_phone: cleanPhone,\n      chat_id: chatId,\n      patient_name: senderData.senderName || senderData.chatName || 'Sagar Patil',\n      user_message: text,\n      message_id: body.idMessage,\n      timestamp: body.timestamp\n    }\n  }];\n}\n\nreturn [];"
+        }
+      },
+      {
+        "id": "parse-ai-booking-action",
+        "name": "Parse AI Booking Action",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          620,
+          192
+        ],
+        "parameters": {
+          "jsCode": "\nconst userRaw = ($json.user_message || '').trim();\nconst userMsg = userRaw.toLowerCase();\nconst senderInfo = $json;\nconst chatId = senderInfo.chat_id || 'default';\n\n// Session tracking\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.userSessions) {\n  staticData.userSessions = {};\n}\n\nlet session = staticData.userSessions[chatId] || {\n  specialty: null,\n  area: null,\n  patientName: null,\n  date: null,\n  time: null\n};\n\nfunction parseSlotToIST(dateStr, timeStr) {\n  const nowUtc = new Date();\n  const istOffsetMs = 5.5 * 60 * 60 * 1000;\n  const nowIst = new Date(nowUtc.getTime() + istOffsetMs);\n\n  let targetYear = nowIst.getUTCFullYear();\n  let targetMonth = nowIst.getUTCMonth();\n  let targetDate = nowIst.getUTCDate() + 1; // default tomorrow\n\n  const dLower = (dateStr || 'tomorrow').toLowerCase();\n  if (dLower.includes('today') || dLower.includes('aaj')) {\n    targetDate = nowIst.getUTCDate();\n  } else if (dLower.includes('tomorrow') || dLower.includes('tommorrow') || dLower.includes('tommorow') || dLower.includes('tomorow') || dLower.includes('tomrw') || dLower.includes('tmrw') || dLower.includes('kal') || dLower.includes('kl')) {\n    targetDate = nowIst.getUTCDate() + 1;\n  } else {\n    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];\n    for (let i = 0; i < days.length; i++) {\n      if (dLower.includes(days[i])) {\n        const currentDay = nowIst.getUTCDay();\n        let diff = (i - currentDay + 7) % 7;\n        if (diff === 0) diff = 7;\n        targetDate = nowIst.getUTCDate() + diff;\n        break;\n      }\n    }\n  }\n\n  let hour = 11;\n  let minute = 30;\n  if (timeStr) {\n    const t = timeStr.toLowerCase().trim();\n    const isPm = t.includes('pm') || t.includes('bje') || t.includes('baje');\n    const isAm = t.includes('am');\n    const m = t.match(/(\\d{1,2})(?::(\\d{2}))?/);\n    if (m) {\n      let h = parseInt(m[1], 10);\n      let min = m[2] ? parseInt(m[2], 10) : 0;\n      if (isPm && h < 12) h += 12;\n      if (isAm && h === 12) h = 0;\n      if (!isPm && !isAm) {\n        if (h >= 1 && h <= 7) h += 12;\n      }\n      hour = h;\n      minute = min;\n    }\n  }\n\n  const target = new Date(Date.UTC(targetYear, targetMonth, targetDate, hour, minute));\n  const y = target.getUTCFullYear();\n  const m = String(target.getUTCMonth() + 1).padStart(2, '0');\n  const d = String(target.getUTCDate()).padStart(2, '0');\n  const hh = String(target.getUTCHours()).padStart(2, '0');\n  const mm = String(target.getUTCMinutes()).padStart(2, '0');\n\n  const startISO = `${y}-${m}-${d}T${hh}:${mm}:00+05:30`;\n\n  const endTarget = new Date(target.getTime() + 30 * 60 * 1000);\n  const ey = endTarget.getUTCFullYear();\n  const em = String(endTarget.getUTCMonth() + 1).padStart(2, '0');\n  const ed = String(endTarget.getUTCDate()).padStart(2, '0');\n  const ehh = String(endTarget.getUTCHours()).padStart(2, '0');\n  const emm = String(endTarget.getUTCMinutes()).padStart(2, '0');\n\n  const endISO = `${ey}-${em}-${ed}T${ehh}:${emm}:00+05:30`;\n  return { startISO, endISO, hour: hh, minute: mm, dateStr: `${y}-${m}-${d}` };\n}\n\n\n\n// 1. Specialty Map\nconst specMap = {\n  '1': 'Cardiology',\n  'cardiology': 'Cardiology',\n  'cardio': 'Cardiology',\n  'heart': 'Cardiology',\n  'dil': 'Cardiology',\n  '2': 'Dermatology',\n  'dermatology': 'Dermatology',\n  'skin': 'Dermatology',\n  'hair': 'Dermatology',\n  'chamdi': 'Dermatology',\n  'baal': 'Dermatology',\n  '3': 'General Physician',\n  'general physician': 'General Physician',\n  'physician': 'General Physician',\n  'fever': 'General Physician',\n  'bukhar': 'General Physician',\n  'cold': 'General Physician',\n  'sardi': 'General Physician',\n  'cough': 'General Physician',\n  'khasi': 'General Physician',\n  'checkup': 'General Physician',\n  '4': 'Orthopedics',\n  'orthopedics': 'Orthopedics',\n  'ortho': 'Orthopedics',\n  'bone': 'Orthopedics',\n  'joint': 'Orthopedics',\n  'haddi': 'Orthopedics',\n  'ghutna': 'Orthopedics',\n  'knee': 'Orthopedics',\n  '5': 'Pediatrics',\n  'pediatrics': 'Pediatrics',\n  'child': 'Pediatrics',\n  'pediatric': 'Pediatrics',\n  'bacha': 'Pediatrics',\n  'baby': 'Pediatrics',\n  '6': 'Gynecology',\n  'gynecology': 'Gynecology',\n  'gynec': 'Gynecology',\n  'women': 'Gynecology',\n  'maternity': 'Gynecology',\n  'lady': 'Gynecology',\n  'ladies': 'Gynecology',\n  'pregnancy': 'Gynecology',\n  '7': 'Dentistry',\n  'dentistry': 'Dentistry',\n  'dental': 'Dentistry',\n  'teeth': 'Dentistry',\n  'dentist': 'Dentistry',\n  'daant': 'Dentistry',\n  '8': 'ENT',\n  'ent': 'ENT',\n  'ear': 'ENT',\n  'nose': 'ENT',\n  'throat': 'ENT',\n  'kaan': 'ENT',\n  'naak': 'ENT',\n  'gala': 'ENT'\n};\n\n// 2. Area Map\nconst areaNumMap = {\n  '1': 'Vesu',\n  '2': 'Piplod',\n  '3': 'Adajan',\n  '4': 'Pal',\n  '5': 'Athwa',\n  '6': 'Varachha',\n  '7': 'Katargam'\n};\n\nconst areaMap = {\n  'vesu': 'Vesu',\n  'piplod': 'Piplod',\n  'adajan': 'Adajan',\n  'pal': 'Pal',\n  'athwa': 'Athwa',\n  'varachha': 'Varachha',\n  'katargam': 'Katargam'\n};\n\nconst db = {\n  \"Cardiology\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Multispeciality Hospital (Practo)\",\n      \"doc\": \"Dr. Hardik Patel (Visiting Interventional Cardiologist)\",\n      \"address\": \"2nd Floor, Western Business Park, Opp. S.D. Jain School, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Sanjeevani+Multispeciality+Hospital+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Apex Heart & Vascular Care\",\n      \"doc\": \"Dr. Hemant Desai\",\n      \"address\": \"Opp. Valentine Cinema, Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Valentine+Cinema+Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Surat Heart & Multispecialty Hospital\",\n      \"doc\": \"Dr. Rajesh Mehta\",\n      \"address\": \"Prime Arcade, Anand Mahal Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Prime+Arcade+Anand+Mahal+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Heart & Medical Clinic\",\n      \"doc\": \"Dr. Tushar Shah\",\n      \"address\": \"Galaxy Circle, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Galaxy+Circle+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Heart First Hospital (Practo)\",\n      \"doc\": \"Dr. Abhyankar Atul Damodar\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Heart+First+Hospital+Athwalines+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Diamond City Heart Hospital\",\n      \"doc\": \"Dr. Ketan Parikh\",\n      \"address\": \"Near Mini Bazar, Varachha Road, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Mangadh+Chowk+Varachha+Road+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Heart Center\",\n      \"doc\": \"Dr. Arvind Patel\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  },\n  \"Dermatology\": {\n    \"Vesu\": {\n      \"clinic\": \"True-Smile Dental & Skin Clinic (Practo)\",\n      \"doc\": \"Dr. Pinak S. Deshpande\",\n      \"address\": \"VIP Road, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=True+Smile+Dental+Skin+Clinic+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"DermaGlow Skin & Laser Clinic\",\n      \"doc\": \"Dr. Pooja Singhal\",\n      \"address\": \"Near Big Bazaar, Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Big+Bazaar+Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Derma Wellness & Skin Hospital\",\n      \"doc\": \"Dr. Sneha Verma\",\n      \"address\": \"Opp. Navyug College, Rander Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Navyug+College+Rander+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Skin Care Clinic\",\n      \"doc\": \"Dr. Ritu Shah\",\n      \"address\": \"Green City Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Green+City+Road+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Skin Clinic\",\n      \"doc\": \"Dr. Jigar Modi\",\n      \"address\": \"Athwa Lines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Lines+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Viradiya Skin Care & Cosmetic Clinic (Practo)\",\n      \"doc\": \"Dr. Hitesh Viradiya\",\n      \"address\": \"Near Mini Bazar, Varachha Main Road, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Viradiya+Skin+Care+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Skin Care Center\",\n      \"doc\": \"Dr. Mansi Patel\",\n      \"address\": \"Laxmi Enclave, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Laxmi+Enclave+Katargam+Surat\"\n    }\n  },\n  \"General Physician\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Multispeciality Hospital OPD (Practo)\",\n      \"doc\": \"Dr. R.C. Shah\",\n      \"address\": \"2nd Floor, Western Business Park, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Healthcare OPD\",\n      \"doc\": \"Dr. Amit Trivedi\",\n      \"address\": \"Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Health Clinic\",\n      \"doc\": \"Dr. Sanjay Patel\",\n      \"address\": \"Gujarat Gas Circle, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gujarat+Gas+Circle+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Family OPD\",\n      \"doc\": \"Dr. Keyur Shah\",\n      \"address\": \"Pal RTO Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Pal+RTO+Road+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Medical Clinic\",\n      \"doc\": \"Dr. Pratik Desai\",\n      \"address\": \"Athwa Gate, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Gate+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Multi-Specialty Clinic\",\n      \"doc\": \"Dr. Ramesh Savani\",\n      \"address\": \"Hirabaug Circle, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Hirabaug+Circle+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Family Clinic\",\n      \"doc\": \"Dr. Hitesh Gondaliya\",\n      \"address\": \"Dhanmora Complex, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dhanmora+Complex+Katargam+Surat\"\n    }\n  },\n  \"Orthopedics\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Orthopedic & Joint Center (Practo)\",\n      \"doc\": \"Dr. Jenil K. Gandhi\",\n      \"address\": \"Western Business Park, Vesu Char Rasta, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Bone & Joint Care\",\n      \"doc\": \"Dr. Manish Patel\",\n      \"address\": \"Kargil Chowk, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Kargil+Chowk+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Surat Ortho Hospital\",\n      \"doc\": \"Dr. Sandip Shah\",\n      \"address\": \"LP Savani Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=LP+Savani+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Orthopedic Clinic\",\n      \"doc\": \"Dr. Nirav Shah\",\n      \"address\": \"Near Pal Lake, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Pal+Lake+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Bone Clinic\",\n      \"doc\": \"Dr. Bharat Desai\",\n      \"address\": \"Athwa Gate, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Gate+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Fracture & Joint Clinic\",\n      \"doc\": \"Dr. Dipak Patel\",\n      \"address\": \"Laxmi Hotel Circle, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Laxmi+Hotel+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Trauma & Ortho Care\",\n      \"doc\": \"Dr. Hiren Vaghani\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  },\n  \"Pediatrics\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Pediatrics OPD (Practo)\",\n      \"doc\": \"Dr. Nirmal Ajmera\",\n      \"address\": \"Western Business Park, Vesu Char Rasta, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Children Clinic\",\n      \"doc\": \"Dr. Bhavna Patel\",\n      \"address\": \"Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Child Care Clinic\",\n      \"doc\": \"Dr. Mayank Patel\",\n      \"address\": \"Anand Mahal Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Anand+Mahal+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Kids Health Care\",\n      \"doc\": \"Dr. Chetan Shah\",\n      \"address\": \"Green City Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Green+City+Road+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Athwa Pediatric Clinic\",\n      \"doc\": \"Dr. Shrenik Shah\",\n      \"address\": \"Athwa Lines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Athwa+Lines+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Children Hospital\",\n      \"doc\": \"Dr. Mehul Patel\",\n      \"address\": \"Near Mini Bazar, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Mini+Bazar+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Child Clinic\",\n      \"doc\": \"Dr. Piyush Savani\",\n      \"address\": \"Dhanmora Complex, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dhanmora+Complex+Katargam+Surat\"\n    }\n  },\n  \"Gynecology\": {\n    \"Vesu\": {\n      \"clinic\": \"Sanjeevani Maternity & Infertility Clinic (Practo)\",\n      \"doc\": \"Dr. Saumya J. Gandhi\",\n      \"address\": \"Western Business Park, Vesu Char Rasta, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Western+Business+Park+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Women & Maternity Care\",\n      \"doc\": \"Dr. Neha Trivedi\",\n      \"address\": \"Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Maternity & Nursing Home\",\n      \"doc\": \"Dr. Aarti Shah\",\n      \"address\": \"LP Savani Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=LP+Savani+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Maternity & Women Hospital\",\n      \"doc\": \"Dr. Rekha Patel\",\n      \"address\": \"Near Pal RTO, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Pal+RTO+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Birla Fertility & IVF (Practo)\",\n      \"doc\": \"Dr. Aashita Jain\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Birla+Fertility+IVF+Athwa+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Women Care Hospital\",\n      \"doc\": \"Dr. Alpana Patel\",\n      \"address\": \"Baroda Prestige, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Baroda+Prestige+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Maternity Hospital\",\n      \"doc\": \"Dr. Geeta Gondaliya\",\n      \"address\": \"Laxmi Enclave, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Laxmi+Enclave+Katargam+Surat\"\n    }\n  },\n  \"Dentistry\": {\n    \"Vesu\": {\n      \"clinic\": \"Summirow Dental Hospital (Practo)\",\n      \"doc\": \"Dr. Ushma K Kakkad\",\n      \"address\": \"VIP Road, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Summirow+Dental+Hospital+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod Modern Dental Clinic\",\n      \"doc\": \"Dr. Rohit Trivedi\",\n      \"address\": \"Near Valentine Cinema, Dumas Road, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Valentine+Cinema+Dumas+Road+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan Dental Care Center\",\n      \"doc\": \"Dr. Jaimin Patel\",\n      \"address\": \"Honey Park Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Honey+Park+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal Smile Dental Clinic\",\n      \"doc\": \"Dr. Mita Shah\",\n      \"address\": \"Galaxy Circle, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Galaxy+Circle+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Kapadia Dental Clinic (Practo)\",\n      \"doc\": \"Dr. Pinak J Kapadia\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Kapadia+Dental+Clinic+Athwa+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha Dental Hospital\",\n      \"doc\": \"Dr. Kalpesh Vaghani\",\n      \"address\": \"Hirabaug Circle, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Hirabaug+Circle+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam Dental Center\",\n      \"doc\": \"Dr. Alpesh Patel\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  },\n  \"ENT\": {\n    \"Vesu\": {\n      \"clinic\": \"Noble Multi-Speciality Hospital (Practo)\",\n      \"doc\": \"Dr. Manit M Mandal\",\n      \"address\": \"VIP Road, Vesu, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Noble+Multi+Speciality+Hospital+Vesu+Surat\"\n    },\n    \"Piplod\": {\n      \"clinic\": \"Piplod ENT Care Center\",\n      \"doc\": \"Dr. Alok Trivedi\",\n      \"address\": \"Kargil Chowk, Piplod, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Kargil+Chowk+Piplod+Surat\"\n    },\n    \"Adajan\": {\n      \"clinic\": \"Adajan ENT Hospital\",\n      \"doc\": \"Dr. Vivek Mehta\",\n      \"address\": \"Honey Park Road, Adajan, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Honey+Park+Road+Adajan+Surat\"\n    },\n    \"Pal\": {\n      \"clinic\": \"Pal ENT & Hearing Clinic\",\n      \"doc\": \"Dr. Rakesh Shah\",\n      \"address\": \"Green City Road, Pal, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Green+City+Road+Pal+Surat\"\n    },\n    \"Athwa\": {\n      \"clinic\": \"Auora ENT Hospital & Clinic (Practo)\",\n      \"doc\": \"Dr. Jayesh Patel\",\n      \"address\": \"Near Athwa Gate, Athwalines, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Auora+ENT+Hospital+Athwa+Surat\"\n    },\n    \"Varachha\": {\n      \"clinic\": \"Varachha ENT & Micro Surgery Clinic\",\n      \"doc\": \"Dr. Ashok Kakadiya\",\n      \"address\": \"Poddar Arcade, Opp. Railway Station, Varachha, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Poddar+Arcade+Varachha+Surat\"\n    },\n    \"Katargam\": {\n      \"clinic\": \"Katargam ENT Clinic\",\n      \"doc\": \"Dr. Nilesh Dhola\",\n      \"address\": \"Gajera Circle, Katargam, Surat\",\n      \"map\": \"https://www.google.com/maps/search/?api=1&query=Gajera+Circle+Katargam+Surat\"\n    }\n  }\n};\nlet replyText = \"\";\nlet isBooking = false;\nlet bookingData = null;\n\n// Clean token split for whole-word matching\nconst words = userMsg.split(/[^a-zA-Z0-9]+/);\n\n// Helper function for name extraction\nfunction extractName(raw) {\n  const m1 = raw.match(/([A-Za-z]+(?:\\s+[A-Za-z]+)*)\\s+(?:k|ke)\\s+naam\\s+se/i);\n  if (m1) return m1[1].trim().replace(/^(?:.*\\s+)?(?:ki|ko|ka|se|hai|for)\\s+/i, '');\n\n  const m2 = raw.match(/(?:patient|for|name(?:\\s+is)?[:\\s]+)\\s*([A-Za-z]+(?:\\s+[A-Za-z]+)?)/i);\n  if (m2) return m2[1].trim();\n\n  // If message is comma separated: \"Sagar Patil, Tomorrow at 2:00 PM\"\n  if (raw.includes(',')) {\n    const part = raw.split(',')[0].trim();\n    if (part.split(' ').length <= 3 && !part.toLowerCase().includes('tomorrow') && !part.toLowerCase().includes('today')) {\n      return part;\n    }\n  }\n\n  // If user simply typed their name: \"Neha Patil\" or \"Rahul\"\n  const clean = raw.trim();\n  if (/^[A-Za-z\\.\\s]{2,30}$/.test(clean)) {\n    const lower = clean.toLowerCase();\n    const reserved = ['hi', 'hello', 'hey', 'start', 'help', 'menu', 'yes', 'confirm', 'vesu', 'pal', 'adajan', 'piplod', 'athwa', 'varachha', 'katargam', 'tomorrow', 'today'];\n    if (!reserved.includes(lower) && !specMap[lower]) {\n      return clean;\n    }\n  }\n\n  return null;\n}\n\n// -------------------------------------------------------------\n// CHECK COMMANDS: RESET / GREETING\n// -------------------------------------------------------------\nconst greetings = ['hi', 'hello', 'hey', 'start', 'help', 'menu', 'hii', 'restart'];\nif (greetings.includes(userMsg)) {\n  session = {\n    specialty: null,\n    area: null,\n    patientName: null,\n    date: null,\n    time: null\n  };\n\n  replyText = `Hello! Welcome to Surat Healthcare Assistant. \ud83d\ude0a\\nHow can we help you today?\\n\\n*STEP 1: Select Your Medical Specialist*\\n1\ufe0f\u20e3 *Cardiology* (Heart Care)\\n2\ufe0f\u20e3 *Dermatology* (Skin & Hair)\\n3\ufe0f\u20e3 *General Physician* (Fever, Cold, Checkup)\\n4\ufe0f\u20e3 *Orthopedics* (Bone & Joint Care)\\n5\ufe0f\u20e3 *Pediatrics* (Child Specialist)\\n6\ufe0f\u20e3 *Gynecology* (Women\u2019s Health)\\n7\ufe0f\u20e3 *Dentistry* (Dental & Teeth)\\n8\ufe0f\u20e3 *ENT* (Ear, Nose & Throat)\\n\\n\ud83d\udc49 *Reply with the number (1-8)* or specialty name!`;\n}\n// -------------------------------------------------------------\n// CHECK CONFIRMATION (YES / CONFIRM)\n// -------------------------------------------------------------\nelse if (userMsg === 'yes' || userMsg === 'confirm' || userMsg.includes('yes') || userMsg.includes('confirm')) {\n  // If user included date or time in this message, update session\n  if (userMsg.includes('tomorrow') || userMsg.includes('tommorrow') || userMsg.includes('tomorow') || userMsg.includes('tomrw') || userMsg.includes('tmrw') || words.includes('kl') || words.includes('kal')) {\n    session.date = 'Tomorrow';\n  } else if (userMsg.includes('today') || words.includes('aaj')) {\n    session.date = 'Today';\n  }\n  const quickTime = userRaw.match(/(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|bje|baje|o'clock)?)/i);\n  if (quickTime && (userMsg.includes('pm') || userMsg.includes('am') || userMsg.includes('bje') || userMsg.includes('baje') || userMsg.includes(':'))) {\n    session.time = quickTime[0].trim();\n  }\n\n  if (session.specialty && session.area && (session.patientName || session.time)) {\n    isBooking = true;\n    const finalName = session.patientName || senderInfo.patient_name || 'Patient';\n    const finalSpec = session.specialty || 'General Physician';\n    const finalArea = session.area || 'Surat';\n    const specClinics = db[finalSpec] || db['General Physician'];\n    const clinic = (specClinics && specClinics[finalArea]) || (db['General Physician'] && db['General Physician'][finalArea]) || {\n      doc: 'Doctor',\n      clinic: 'Surat Healthcare Clinic',\n      address: `${finalArea}, Surat`,\n      map: ''\n    };\n\n    const slot = parseSlotToIST(session.date, session.time);\n    const startISO = slot.startISO;\n    const endISO = slot.endISO;\n\n    const finalWhen = (session.date ? session.date + ' ' : 'Tomorrow ') + (session.time ? 'at ' + session.time : 'at 11:30 AM');\n    const bookingId = 'APT-' + Math.random().toString(36).substring(2, 8).toUpperCase();\n\n    bookingData = {\n      booking_id: bookingId,\n      summary: `Doctor Appointment - ${finalSpec} (${finalName})`,\n      description: `Patient: ${finalName}\\nPhone: ${senderInfo.sender_phone}\\nDoctor: ${clinic.doc}\\nClinic: ${clinic.clinic}\\nAddress: ${clinic.address}\\nSpecialty: ${finalSpec}\\nArea: ${finalArea}\\nScheduled Time: ${finalWhen}\\nBooked via Surat WhatsApp Healthcare Assistant`,\n      start: startISO,\n      end: endISO,\n      location: `${finalArea}, Surat`,\n      patient_name: finalName,\n      doctor: clinic.doc,\n      clinic: clinic.clinic,\n      address: clinic.address,\n      map: clinic.map || '',\n      area: finalArea,\n      specialty: finalSpec,\n      phone: senderInfo.sender_phone,\n      scheduled_time: finalWhen,\n      date_str: session.date || 'Tomorrow',\n      time_str: session.time || '11:30 AM'\n    };\n\n    replyText = `\ud83c\udf89 *APPOINTMENT CONFIRMED!*\\n\\n\u2022 *Appointment ID:* ${bookingId}\\n\u2022 *Patient Name:* ${finalName}\\n\u2022 *Specialty:* ${finalSpec}\\n\u2022 *Area:* ${finalArea}\\n\u2022 *Doctor:* ${clinic.doc}\\n\u2022 *Clinic:* ${clinic.clinic}\\n\u2022 *Address:* ${clinic.address}\\n\u2022 *Date & Time:* ${finalWhen} (IST)\\n\u2022 *Status:* Scheduled on Doctor Google Calendar\\n\u2022 *Phone:* ${senderInfo.sender_phone}\\n\\nThank you for choosing Surat Healthcare Assistant. Please arrive 10 minutes prior to your slot! \ud83e\ude7a`;\n\n    // Reset session after successful booking\n    session = { specialty: null, area: null, patientName: null, date: null, time: null };\n  } else {\n    replyText = `To confirm your appointment, we still need your details! Please reply *Hi* to restart or provide your preferred specialty and area.`;\n  }\n}\n// -------------------------------------------------------------\n// ANALYZE & EXTRACT DETAILS ACCORDING TO RULE SET\n// -------------------------------------------------------------\nelse {\n  // 1. Extract Area (Only match 1-7 if specialty is already chosen!)\n  let detectedArea = null;\n  if (/^[1-7]$/.test(userMsg)) {\n    if (session.specialty && !session.area) {\n      detectedArea = areaNumMap[userMsg];\n    }\n  }\n  if (!detectedArea) {\n    for (const [k, v] of Object.entries(areaMap)) {\n      if (words.includes(k)) {\n        detectedArea = v;\n        break;\n      }\n    }\n  }\n  if (detectedArea) session.area = detectedArea;\n\n  // 2. Extract Specialty\n  let detectedSpec = null;\n  if (/^[1-8]$/.test(userMsg)) {\n    if (!session.specialty) {\n      detectedSpec = specMap[userMsg];\n    }\n  } else {\n    for (const [kw, spec] of Object.entries(specMap)) {\n      if (!/^\\d$/.test(kw) && words.includes(kw)) {\n        detectedSpec = spec;\n        break;\n      }\n    }\n  }\n  if (detectedSpec) session.specialty = detectedSpec;\n\n  // 3. Extract Name\n  const detectedName = extractName(userRaw);\n  if (detectedName) session.patientName = detectedName;\n\n  // 4. Extract Date\n  if (userMsg.includes('tomorrow') || userMsg.includes('tommorrow') || userMsg.includes('tomorow') || userMsg.includes('tomrw') || userMsg.includes('tmrw') || words.includes('kl') || words.includes('kal')) {\n    session.date = 'Tomorrow';\n  } else if (userMsg.includes('today') || words.includes('aaj')) {\n    session.date = 'Today';\n  } else {\n    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];\n    for (const d of days) {\n      if (userMsg.includes(d)) {\n        session.date = d.charAt(0).toUpperCase() + d.slice(1);\n        break;\n      }\n    }\n  }\n\n  // 5. Extract Time\n  const timeMatch = userRaw.match(/(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|bje|baje|o'clock)?)/i);\n  if (timeMatch && (userMsg.includes('pm') || userMsg.includes('am') || userMsg.includes('bje') || userMsg.includes('baje') || userMsg.includes(':'))) {\n    session.time = timeMatch[0].trim();\n  }\n\n  // -----------------------------------------------------------\n  // DECISION TREE (Check what is left: Specialty -> Area -> Name/Time)\n  // -----------------------------------------------------------\n\n  // A. Missing Specialty?\n  if (!session.specialty) {\n    const ack = (session.patientName || session.time) ? `Got your request${session.patientName ? ` for *${session.patientName}*` : ''}${session.time ? ` at *${session.date || ''} ${session.time}*` : ''}.\\n\\n` : '';\n    replyText = `${ack}Please select the *Medical Specialist* you need:\\n\\n1\ufe0f\u20e3 *Cardiology* (Heart Care)\\n2\ufe0f\u20e3 *Dermatology* (Skin & Hair)\\n3\ufe0f\u20e3 *General Physician* (Fever, Cold, Checkup)\\n4\ufe0f\u20e3 *Orthopedics* (Bone & Joint Care)\\n5\ufe0f\u20e3 *Pediatrics* (Child Specialist)\\n6\ufe0f\u20e3 *Gynecology* (Women\u2019s Health)\\n7\ufe0f\u20e3 *Dentistry* (Dental & Teeth)\\n8\ufe0f\u20e3 *ENT* (Ear, Nose & Throat)\\n\\n\ud83d\udc49 *Reply with the number (1-8)* or specialty name!`;\n  }\n  // B. Missing Area?\n  else if (!session.area) {\n    replyText = `Great! You selected *${session.specialty}*.\\n\\n*STEP 2: Select Your Preferred Area in Surat*\\n\ud83d\udccd 1. *Vesu*\\n\ud83d\udccd 2. *Piplod*\\n\ud83d\udccd 3. *Adajan*\\n\ud83d\udccd 4. *Pal*\\n\ud83d\udccd 5. *Athwa*\\n\ud83d\udccd 6. *Varachha*\\n\ud83d\udccd 7. *Katargam*\\n\\n\ud83d\udc49 *Reply with the area name (e.g. Vesu, Pal) or number (1-7)*!`;\n  }\n  // C. Has Specialty & Area, check if Name or Date/Time is missing!\n  else if (!session.patientName || !session.date || !session.time) {\n    const spec = session.specialty;\n    const specClinics = db[spec] || db['General Physician'];\n    const clinic = specClinics[session.area] || db['General Physician'][session.area];\n\n    // Subcase C1: Both Name AND Time/Date are missing -> show full clinic card\n    if (!session.patientName && (!session.date || !session.time)) {\n      replyText = `*STEP 3: Available Doctor & Clinic in ${session.area}*\\n\\n\ud83d\udc68\u200d\u2695\ufe0f *Doctor:* ${clinic.doc}\\n\ud83c\udfe5 *Clinic:* ${clinic.clinic}\\n\ud83d\udccd *Address:* ${clinic.address}\\n\ud83d\uddfa\ufe0f *Maps:* ${clinic.map}\\n\\n\ud83d\udd52 *Working Hours:* Mon\u2013Sat, 10:00 AM \u2013 6:00 PM (Lunch: 1:00 PM \u2013 2:00 PM)\\n\\n\ud83d\udca1 *Suggested Next Slots:*\\n\u2022 Tomorrow at 10:30 AM\\n\u2022 Tomorrow at 11:30 AM\\n\u2022 Tomorrow at 3:00 PM\\n\u2022 Tomorrow at 4:30 PM\\n\\n\ud83d\udc49 *Please reply with your *Patient Full Name* and *Preferred Date & Time**\\n*(Example: \"Sagar Patil, Tomorrow at 11:30 AM\")*`;\n    }\n    // Subcase C2: User ALREADY provided Date/Time, but Patient Name is still missing!\n    else if (!session.patientName) {\n      const when = (session.date ? session.date + ' ' : '') + session.time;\n      replyText = `Got your requested slot (*${when}*) for *${clinic.doc}* at *${clinic.clinic}*! \ud83d\udd52\\n\\n\ud83d\udc49 *Please reply with the Patient's Full Name* to finalize your appointment!\\n*(e.g., \"Sagar Patil\" or \"Rahul Patel\")*`;\n    }\n    // Subcase C3: User ALREADY provided Patient Name, but Date/Time is still missing!\n    else {\n      replyText = `Got it, appointment for *${session.patientName}* with *${clinic.doc}*! \ud83d\udc64\\n\\n\ud83d\udca1 *Suggested Next Slots:*\\n\u2022 Tomorrow at 10:30 AM\\n\u2022 Tomorrow at 11:30 AM\\n\u2022 Tomorrow at 3:00 PM\\n\u2022 Tomorrow at 4:30 PM\\n\\n\ud83d\udc49 *Please reply with your Preferred Date & Time* (e.g., \"Tomorrow at 4:00 PM\")!`;\n    }\n  }\n  // D. Everything present! Show Booking Summary Card (Step 4)\n  else {\n    const spec = session.specialty;\n    const specClinics = db[spec] || db['General Physician'];\n    const clinic = specClinics[session.area] || db['General Physician'][session.area];\n    const when = `${session.date} at ${session.time}`;\n\n    replyText = `*STEP 4: Review Your Booking Summary* \ud83d\udccb\\n\\n\u2022 *Patient Name:* ${session.patientName}\\n\u2022 *Specialty:* ${session.specialty}\\n\u2022 *Doctor:* ${clinic.doc}\\n\u2022 *Clinic:* ${clinic.clinic}\\n\u2022 *Address:* ${clinic.address}\\n\u2022 *Scheduled Time:* ${when}\\n\u2022 *Phone:* ${senderInfo.sender_phone}\\n\\n\ud83d\udc49 *Reply YES or CONFIRM to finalize and schedule in Google Calendar!*`;\n  }\n}\n\n// Save session\nstaticData.userSessions[chatId] = session;\n\nreturn [{\n  json: {\n    has_booking: isBooking,\n    booking_data: bookingData,\n    chat_id: senderInfo.chat_id,\n    patient_name: session.patientName || senderInfo.patient_name,\n    sender_phone: senderInfo.sender_phone,\n    reply_message: replyText\n  }\n}];\n"
+        }
+      },
+      {
+        "id": "if-has-booking",
+        "name": "Is Booking Present?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          820,
+          192
+        ],
+        "parameters": {
+          "conditions": {
+            "boolean": [
+              {
+                "value1": "={{ $json.has_booking }}",
+                "value2": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "google-calendar-create-event",
+        "name": "Create Event in Google Calendar",
+        "type": "n8n-nodes-base.googleCalendar",
+        "typeVersion": 1.2,
+        "continueOnFail": true,
+        "position": [
+          1020,
+          100
+        ],
+        "parameters": {
+          "operation": "create",
+          "calendar": {
+            "__rl": true,
+            "value": "sagarlr1998@gmail.com",
+            "mode": "list"
+          },
+          "start": "={{ $('Parse AI Booking Action').item.json.booking_data.start }}",
+          "end": "={{ $('Parse AI Booking Action').item.json.booking_data.end }}",
+          "additionalFields": {
+            "summary": "={{ $('Parse AI Booking Action').item.json.booking_data.summary }}",
+            "description": "={{ $('Parse AI Booking Action').item.json.booking_data.description }}",
+            "location": "={{ $('Parse AI Booking Action').item.json.booking_data.location || 'Surat' }}"
+          }
+        },
+        "credentials": {
+          "googleCalendarOAuth2Api": {
+            "id": "B3OUkyVGiIbOvVnF",
+            "name": "Google Calendar account"
+          }
+        }
+      },
+      {
+        "id": "a3b19cc9-6c0b-4d4d-b33e-3376b38340ab",
+        "name": "Send WhatsApp Reply to Patient1",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1340,
+          192
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.green-api.com/waInstance710722787826/sendMessage/10afa0b67fc44b0e80ca789b6aa26a3b43067a0af6f445b291",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"chatId\": \"{{ $('Parse AI Booking Action').item.json.chat_id }}\",\n  \"message\": {{ JSON.stringify($('Parse AI Booking Action').item.json.reply_message) }}\n}",
+          "options": {}
+        }
+      },
+      {
+        "id": "save-appointment-neon-db",
+        "name": "Save Appointment to Neon DB",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "continueOnFail": true,
+        "position": [
+          1140,
+          100
+        ],
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "=INSERT INTO appointments (\n  id, booking_id, patient_name, phone, specialty, area, doctor, \n  clinic_name, address, scheduled_time, date_str, time_str, \n  status, source_channel, map_url, google_calendar_event_id, created_at, updated_at\n) VALUES (\n  gen_random_uuid(),\n  '{{ $('Parse AI Booking Action').item.json.booking_data.booking_id }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.patient_name.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.phone }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.specialty }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.area }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.doctor.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.clinic.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.address.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.scheduled_time }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.date_str }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.time_str }}',\n  'CONFIRMED',\n  'whatsapp',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.map }}',\n  '{{ $json.id || '' }}',\n  NOW(),\n  NOW()\n);\n\nINSERT INTO surat_appointments (\n  id, patient_name, phone, specialty, area, doctor, \n  clinic_name, address, scheduled_time, date_str, time_str, \n  status, source_channel, map_url, created_at\n) VALUES (\n  '{{ $('Parse AI Booking Action').item.json.booking_data.booking_id }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.patient_name.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.phone }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.specialty }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.area }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.doctor.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.clinic.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.address.replace(/'/g, \"''\") }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.scheduled_time }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.date_str }}',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.time_str }}',\n  'confirmed',\n  'whatsapp',\n  '{{ $('Parse AI Booking Action').item.json.booking_data.map }}',\n  NOW()\n) ON CONFLICT (id) DO NOTHING;"
+        },
+        "credentials": {
+          "postgres": {
+            "id": "dl1zfn9AxvHZ9VcX",
+            "name": "Neon PostgreSQL neondb"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Meta Webhook Verification (GET)1": {
+        "main": [
+          [
+            {
+              "node": "Return Challenge Token1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "WhatsApp Inbound Message (POST)1": {
+        "main": [
+          [
+            {
+              "node": "Acknowledge Meta 200 OK1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extract Patient Message & Info1": {
+        "main": [
+          [
+            {
+              "node": "Parse AI Booking Action",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse AI Booking Action": {
+        "main": [
+          [
+            {
+              "node": "Is Booking Present?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Booking Present?": {
+        "main": [
+          [
+            {
+              "node": "Create Event in Google Calendar",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Send WhatsApp Reply to Patient1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Event in Google Calendar": {
+        "main": [
+          [
+            {
+              "node": "Save Appointment to Neon DB",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Acknowledge Meta 200 OK1": {
+        "main": [
+          [
+            {
+              "node": "Extract Patient Message & Info1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Save Appointment to Neon DB": {
+        "main": [
+          [
+            {
+              "node": "Send WhatsApp Reply to Patient1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Bharat Prajapat",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "createdAt": "2026-11-05T16:13:41.276Z",
+    "updatedAt": "2026-11-05T16:13:41.276Z",
+    "workflowPublishHistory": [
+      {
+        "id": 168,
+        "workflowId": "wYye8Ql1R7JbpRbU",
+        "versionId": "a49bf6c8-36cc-46a8-9668-92d97b357553",
+        "event": "activated",
+        "userId": "f0b75621-99f2-4c7b-9ff7-94e36dd5aafa",
+        "createdAt": "2026-11-05T16:13:41.397Z"
+      }
+    ]
+  },
+  "parentFolder": null
+}

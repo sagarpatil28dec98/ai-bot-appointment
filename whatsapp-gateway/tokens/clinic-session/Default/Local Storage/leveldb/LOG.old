@@ -1,0 +1,6 @@
+2026/11/12-14:13:00.026 3d463 Reusing MANIFEST /Users/sagarpatil/Downloads/ai-bot-appointment/whatsapp-gateway/tokens/clinic-session/Default/Local Storage/leveldb/MANIFEST-000001
+2026/11/12-14:13:00.027 3d463 Recovering log #4
+2026/11/12-14:13:00.028 3d463 Reusing old log /Users/sagarpatil/Downloads/ai-bot-appointment/whatsapp-gateway/tokens/clinic-session/Default/Local Storage/leveldb/000004.log 
+2026/11/12-14:14:00.038 3d468 Level-0 table #8: started
+2026/11/12-14:14:00.041 3d468 Level-0 table #8: 12242 bytes OK
+2026/11/12-14:14:00.047 3d468 Delete type=0 #4

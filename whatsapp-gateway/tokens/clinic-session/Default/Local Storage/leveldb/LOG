@@ -1,0 +1,27 @@
+2026/11/12-14:26:45.103 42188 Reusing MANIFEST /Users/sagarpatil/Downloads/ai-bot-appointment/whatsapp-gateway/tokens/clinic-session/Default/Local Storage/leveldb/MANIFEST-000001
+2026/11/12-14:26:45.104 42188 Recovering log #7
+2026/11/12-14:26:45.104 42188 Reusing old log /Users/sagarpatil/Downloads/ai-bot-appointment/whatsapp-gateway/tokens/clinic-session/Default/Local Storage/leveldb/000007.log 
+2026/11/12-15:18:34.586 4218d Level-0 table #11: started
+2026/11/12-15:18:34.591 4218d Level-0 table #11: 12148 bytes OK
+2026/11/12-15:18:34.594 4218d Delete type=0 #7
+2026/11/12-17:16:04.168 4218d Level-0 table #13: started
+2026/11/12-17:16:04.173 4218d Level-0 table #13: 11367 bytes OK
+2026/11/12-17:16:04.177 4218d Delete type=0 #10
+2026/11/12-18:55:47.363 4218d Level-0 table #15: started
+2026/11/12-18:55:47.382 4218d Level-0 table #15: 11489 bytes OK
+2026/11/12-18:55:47.387 4218d Delete type=0 #12
+2026/11/12-21:42:48.466 4218d Level-0 table #17: started
+2026/11/12-21:42:48.474 4218d Level-0 table #17: 12481 bytes OK
+2026/11/12-21:42:48.479 4218d Delete type=0 #14
+2026/11/12-21:42:48.488 4218d Compacting 4@0 + 1@1 files
+2026/11/12-21:42:48.494 4218d Generated table #18@0: 25 keys, 3077 bytes
+2026/11/12-21:42:48.494 4218d Compacted 4@0 + 1@1 files => 3077 bytes
+2026/11/12-21:42:48.496 4218d compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/11/12-21:42:48.497 4218d Delete type=2 #15
+2026/11/12-21:42:48.497 4218d Delete type=2 #17
+2026/11/12-21:42:48.497 4218d Delete type=2 #13
+2026/11/12-21:42:48.497 4218d Delete type=2 #11
+2026/11/12-21:42:48.497 4218d Delete type=2 #8
+2026/11/13-13:40:11.006 4218d Level-0 table #20: started
+2026/11/13-13:40:11.016 4218d Level-0 table #20: 14451 bytes OK
+2026/11/13-13:40:11.039 4218d Delete type=0 #16

@@ -1,0 +1,132 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: healthai-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-healthai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-healthai_secure_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-healthai_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-healthai} -d ${POSTGRES_DB:-healthai_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - healthai-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: healthai-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - healthai-network
+
+  fastapi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: healthai-fastapi
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - healthai-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: healthai-frontend
+    restart: always
+    ports:
+      - "3000:80"
+    networks:
+      - healthai-network
+
+  openwa:
+    image: openwa/wa-automate:latest
+    container_name: healthai-openwa
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - API_KEY=${OPENWA_API_KEY:-openwa_secure_api_key_123}
+      - WEBHOOK_URL=${OPENWA_WEBHOOK_URL:-http://n8n:5678/webhook/whatsapp-inbound}
+      - SESSION_NAME=${OPENWA_SESSION_NAME:-clinic-assistant}
+    volumes:
+      - openwa_sessions:/root/.config
+    networks:
+      - healthai-network
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: healthai-n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-admin_secure_password}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-super_secret_n8n_encryption_key_32chars}
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - healthai-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: healthai-nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - fastapi
+    networks:
+      - healthai-network
+
+networks:
+  healthai-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  openwa_sessions:
+  n8n_data:

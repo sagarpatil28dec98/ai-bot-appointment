@@ -1,0 +1,55 @@
+{
+  "name": "HealthAI - Booking Confirmed & Calendar Invite",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "booking-confirmed",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Webhook: Booking Confirmed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "booking-confirmed-webhook"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list"
+        },
+        "start": "={{ $json.body.start_time }}",
+        "end": "={{ $json.body.end_time }}",
+        "additionalFields": {
+          "summary": "=Clinic Consultation: Dr. {{ $json.body.doctor_name }} with {{ $json.body.patient_name }}",
+          "description": "=Appointment Details:\n• Doctor: {{ $json.body.doctor_name }} ({{ $json.body.specialization }})\n• Patient: {{ $json.body.patient_name }}\n• Phone: {{ $json.body.patient_phone }}\n• Reason/Notes: {{ $json.body.notes || 'Routine consultation' }}",
+          "attendees": [
+            "={{ $json.body.patient_email }}"
+          ]
+        }
+      },
+      "name": "Google Calendar: Create Event & Invite",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Booking Confirmed": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar: Create Event & Invite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {}
+}

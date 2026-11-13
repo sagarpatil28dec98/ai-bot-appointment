@@ -1,0 +1,88 @@
+{
+  "name": "HealthAI WhatsApp Inbound & Dispatch",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-inbound",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "OpenWA Webhook Inbound",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "whatsapp-inbound-hook"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Normalize incoming WhatsApp message structure\nconst body = items[0].json.body || items[0].json;\n\n// Handle OpenWA standard event payloads\nlet senderPhone = body.from ? body.from.replace('@c.us', '') : '';\nlet messageText = body.body || body.content || '';\nlet senderName = (body.sender && body.sender.pushname) ? body.sender.pushname : 'WhatsApp Patient';\n\nreturn [{\n  json: {\n    from_number: senderPhone,\n    message_text: messageText,\n    sender_name: senderName,\n    message_id: body.id || ''\n  }\n}];"
+      },
+      "name": "Transform Payload",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://fastapi:8000/api/v1/chat/message",
+        "options": {},
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "from_number",
+              "value": "={{$node[\"Transform Payload\"].json[\"from_number\"]}}"
+            },
+            {
+              "name": "message_text",
+              "value": "={{$node[\"Transform Payload\"].json[\"message_text\"]}}"
+            },
+            {
+              "name": "sender_name",
+              "value": "={{$node[\"Transform Payload\"].json[\"sender_name\"]}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "name": "Call HealthAI Agent API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "OpenWA Webhook Inbound": {
+      "main": [
+        [
+          {
+            "node": "Transform Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Payload": {
+      "main": [
+        [
+          {
+            "node": "Call HealthAI Agent API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {}
+}
