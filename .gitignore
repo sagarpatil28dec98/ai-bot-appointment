@@ -7,3 +7,6 @@ __pycache__/
 .DS_Store
 dist/
 build/
+whatsapp-gateway/tokens/
+whatsapp-gateway/gateway.log
+*.log
