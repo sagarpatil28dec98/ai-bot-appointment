@@ -20,8 +20,28 @@ const FASTAPI_WEBHOOK = process.env.FASTAPI_WEBHOOK || 'http://127.0.0.1:8000/ap
 
 let currentClient = null;
 let currentQrCodeData = null;
-let isConnected = false;
-let isInitializing = false;
+let clientState = 'idle'; // 'idle' | 'starting' | 'qr_ready' | 'connected'
+let retryTimer = null;
+
+function cleanStaleSession() {
+    try {
+        const { execSync } = require('child_process');
+        const fs = require('fs');
+        execSync('pkill -f "tokens/clinic-session" || true');
+        const lockPath = path.join(__dirname, 'tokens/clinic-session/SingletonLock');
+        if (fs.existsSync(lockPath)) {
+            try { fs.unlinkSync(lockPath); } catch(e) {}
+        }
+    } catch(e) {}
+}
+
+function scheduleReconnect(delayMs = 5000) {
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+        retryTimer = null;
+        initWhatsAppClient();
+    }, delayMs);
+}
 
 app.get('/', (req, res) => {
     res.send(`
@@ -42,7 +62,7 @@ app.get('/', (req, res) => {
     <body>
         <div class="card">
             <h2>WhatsApp AI Assistant</h2>
-            ${isConnected 
+            ${clientState === 'connected'
                 ? '<div class="success">Connected to WhatsApp! The AI Assistant is active and ready to reply.</div>' 
                 : currentQrCodeData 
                     ? '<p>Scan with your WhatsApp phone app:</p><img src="' + currentQrCodeData + '" alt="QR Code"/><div class="status">Go to WhatsApp &gt; Linked Devices &gt; Link a Device</div>' 
@@ -56,33 +76,32 @@ app.get('/', (req, res) => {
 
 // API Status Endpoint for the Main Portal UI
 app.get('/api/status', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
     let phone = null;
     try {
         if (currentClient && currentClient.session) {
             phone = currentClient.session;
         }
     } catch(e) {}
+
     res.json({
-        connected: isConnected,
+        connected: clientState === 'connected',
         qr_code: currentQrCodeData,
-        phone: phone || (isConnected ? 'Active Clinic Phone' : null),
-        status: isConnected ? 'connected' : (currentQrCodeData ? 'qr_ready' : 'initializing')
+        phone: phone || (clientState === 'connected' ? 'Active Clinic Phone' : null),
+        status: clientState === 'connected' ? 'connected' : (currentQrCodeData ? 'qr_ready' : clientState)
     });
 });
 
 // Switch / Reconnect Clinic Number (clears session and generates fresh QR)
 app.post('/api/logout', async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
     try {
         if (currentClient) {
             try { await currentClient.logout(); } catch(e) {}
         }
-        isConnected = false;
+        clientState = 'idle';
         currentClient = null;
         currentQrCodeData = null;
-        // Re-initialize WPPConnect in background to generate fresh QR
-        setTimeout(initWhatsAppClient, 1000);
+        cleanStaleSession();
+        scheduleReconnect(1000);
         res.json({ success: true, message: 'Disconnected. Generating fresh QR code...' });
     } catch(err) {
         res.status(500).json({ error: err.message });
@@ -146,40 +165,36 @@ app.post('/api/simulate-chat', async (req, res) => {
 });
 
 function initWhatsAppClient() {
-    if (isInitializing) return;
-    isInitializing = true;
+    if (clientState === 'starting' || clientState === 'connected') return;
+    clientState = 'starting';
     console.log('Initializing WPPConnect WhatsApp Client...');
-
-    // Clear any stale Chrome process or SingletonLock on tokens/clinic-session
-    try {
-        const { execSync } = require('child_process');
-        const fs = require('fs');
-        execSync('pkill -f "tokens/clinic-session" || true');
-        const lockPath = path.join(__dirname, 'tokens/clinic-session/SingletonLock');
-        if (fs.existsSync(lockPath)) {
-            fs.unlinkSync(lockPath);
-        }
-    } catch(e) {}
 
     wppconnect.create({
         session: 'clinic-session',
         catchQR: (base64Qr, asciiQR) => {
             currentQrCodeData = base64Qr;
-            isConnected = false;
-            isInitializing = false;
+            clientState = 'qr_ready';
             console.log('Fresh WhatsApp QR Code generated and ready to scan!');
+            try {
+                const fs = require('fs');
+                const base64Data = base64Qr.replace(/^data:image\/png;base64,/, "");
+                fs.writeFileSync(path.join(__dirname, 'qr.png'), base64Data, 'base64');
+            } catch(e) {}
         },
         statusFind: (statusSession, session) => {
             console.log('Status Session:', statusSession);
             if (statusSession === 'isLogged' || statusSession === 'inChat' || statusSession === 'chatsAvailable') {
-                isConnected = true;
+                clientState = 'connected';
                 currentQrCodeData = null;
-                isInitializing = false;
+                console.log('*** WhatsApp Client Successfully Logged In and Ready! ***');
             } else if (statusSession === 'browserClose' || statusSession === 'disconnected' || statusSession === 'notLogged') {
-                isConnected = false;
-                currentClient = null;
-                isInitializing = false;
                 console.log(`WhatsApp session state shifted to: ${statusSession}`);
+                if (clientState !== 'starting') {
+                    clientState = 'idle';
+                    currentClient = null;
+                    currentQrCodeData = null;
+                    scheduleReconnect(6000);
+                }
             }
         },
         autoClose: 0,
@@ -203,8 +218,7 @@ function initWhatsAppClient() {
         }
     }).then((client) => {
         currentClient = client;
-        isConnected = true;
-        isInitializing = false;
+        clientState = 'connected';
         console.log('WhatsApp client connected and ready to receive messages!');
 
         // Inbound listener -> forward to FastAPI
@@ -238,12 +252,15 @@ function initWhatsAppClient() {
             }
         });
     }).catch((err) => {
-        isInitializing = false;
-        console.error('WPPConnect launch error (Gateway will continue serving API):', err.message);
+        clientState = 'idle';
+        console.error('WPPConnect launch error (Gateway will retry):', err.message);
+        cleanStaleSession();
+        scheduleReconnect(6000);
     });
 }
 
-// Start client initialization
+// Start client initialization after clearing any stale locks
+cleanStaleSession();
 initWhatsAppClient();
 
 app.listen(PORT, '0.0.0.0', () => {
