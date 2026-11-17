@@ -2,6 +2,7 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 const express = require('express');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
@@ -26,16 +27,28 @@ let retryTimer = null;
 function cleanStaleSession() {
     try {
         const { execSync } = require('child_process');
-        const fs = require('fs');
-        execSync('pkill -f "tokens/clinic-session" || true');
-        const lockPath = path.join(__dirname, 'tokens/clinic-session/SingletonLock');
-        if (fs.existsSync(lockPath)) {
-            try { fs.unlinkSync(lockPath); } catch(e) {}
+        try { execSync('pkill -f "tokens/clinic-session" || true'); } catch(e) {}
+        const tokenDir = path.join(__dirname, 'tokens/clinic-session');
+        const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort', 'RunningChromeVersion'];
+        for (const file of lockFiles) {
+            try {
+                fs.unlinkSync(path.join(tokenDir, file));
+            } catch(e) {}
         }
     } catch(e) {}
 }
 
-function scheduleReconnect(delayMs = 5000) {
+function resetSession() {
+    cleanStaleSession();
+    try {
+        const tokenDir = path.join(__dirname, 'tokens/clinic-session');
+        if (fs.existsSync(tokenDir)) {
+            fs.rmSync(tokenDir, { recursive: true, force: true });
+        }
+    } catch(e) {}
+}
+
+function scheduleReconnect(delayMs = 4000) {
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = setTimeout(() => {
         retryTimer = null;
@@ -96,16 +109,15 @@ app.post('/api/logout', async (req, res) => {
     try {
         if (currentClient) {
             try { await currentClient.logout(); } catch(e) {}
+            try { await currentClient.close(); } catch(e) {}
         }
-        clientState = 'idle';
-        currentClient = null;
-        currentQrCodeData = null;
-        cleanStaleSession();
-        scheduleReconnect(1000);
-        res.json({ success: true, message: 'Disconnected. Generating fresh QR code...' });
-    } catch(err) {
-        res.status(500).json({ error: err.message });
-    }
+    } catch(err) {}
+    clientState = 'idle';
+    currentClient = null;
+    currentQrCodeData = null;
+    resetSession();
+    scheduleReconnect(1000);
+    res.json({ success: true, message: 'Disconnected. Generating fresh QR code...' });
 });
 
 // Outbound message endpoint (FastAPI -> WhatsApp)
@@ -118,7 +130,7 @@ app.post('/api/send-message', async (req, res) => {
         return res.status(400).json({ error: 'Missing destination (to/phone) or message content' });
     }
 
-    if (!currentClient || !isConnected) {
+    if (!currentClient || clientState !== 'connected') {
         console.log(`[Outbound Queued/Simulated] WhatsApp client not connected. Target: ${to}, Message preview: ${content.substring(0, 40)}...`);
         return res.json({ status: 'simulated_or_queued', to: to, warning: 'WhatsApp phone not linked; notification simulated' });
     }
@@ -171,12 +183,11 @@ function initWhatsAppClient() {
 
     wppconnect.create({
         session: 'clinic-session',
-        catchQR: (base64Qr, asciiQR) => {
+        catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
             currentQrCodeData = base64Qr;
             clientState = 'qr_ready';
-            console.log('Fresh WhatsApp QR Code generated and ready to scan!');
+            console.log(`Fresh WhatsApp QR Code generated (attempt ${attempts || 1}) and ready to scan!`);
             try {
-                const fs = require('fs');
                 const base64Data = base64Qr.replace(/^data:image\/png;base64,/, "");
                 fs.writeFileSync(path.join(__dirname, 'qr.png'), base64Data, 'base64');
             } catch(e) {}
@@ -187,14 +198,13 @@ function initWhatsAppClient() {
                 clientState = 'connected';
                 currentQrCodeData = null;
                 console.log('*** WhatsApp Client Successfully Logged In and Ready! ***');
-            } else if (statusSession === 'browserClose' || statusSession === 'disconnected' || statusSession === 'notLogged') {
+            } else if (statusSession === 'browserClose' || statusSession === 'disconnected') {
                 console.log(`WhatsApp session state shifted to: ${statusSession}`);
-                if (clientState !== 'starting') {
-                    clientState = 'idle';
-                    currentClient = null;
-                    currentQrCodeData = null;
-                    scheduleReconnect(6000);
-                }
+                clientState = 'idle';
+                currentClient = null;
+                currentQrCodeData = null;
+                cleanStaleSession();
+                scheduleReconnect(3000);
             }
         },
         autoClose: 0,
@@ -202,18 +212,14 @@ function initWhatsAppClient() {
         waitForLogin: true,
         headless: true,
         devtools: false,
-        useChrome: true,
+        useChrome: false,
         debug: false,
-        logQR: false,
+        logQR: true,
         puppeteerOptions: {
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu'
+                '--disable-dev-shm-usage'
             ]
         }
     }).then((client) => {
@@ -255,7 +261,7 @@ function initWhatsAppClient() {
         clientState = 'idle';
         console.error('WPPConnect launch error (Gateway will retry):', err.message);
         cleanStaleSession();
-        scheduleReconnect(6000);
+        scheduleReconnect(5000);
     });
 }
 
