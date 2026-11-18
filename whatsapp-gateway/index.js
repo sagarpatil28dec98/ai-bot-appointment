@@ -152,7 +152,7 @@ app.post('/api/send-message', async (req, res) => {
 // Interactive Simulator Endpoint for In-Browser Testing
 app.post('/api/simulate-chat', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    const { message, phone, patient_name } = req.body;
+    const { message, phone, patient_name, clinic_id, clinic_name } = req.body;
     const senderPhone = (phone || '919876543210').replace(/[^0-9]/g, '');
     const patientName = patient_name || 'Patient';
 
@@ -161,7 +161,9 @@ app.post('/api/simulate-chat', async (req, res) => {
             message: message || 'Hi, need appointment in Surat',
             session_id: `wa_${senderPhone}`,
             phone: senderPhone,
-            patient_name: patientName
+            patient_name: patientName,
+            clinic_id: clinic_id || 'CLN-SURAT-07',
+            clinic_name: clinic_name || 'geetrix solutions clinic'
         });
         return res.json({
             success: true,
@@ -243,7 +245,9 @@ function initWhatsAppClient() {
                     message: message.body,
                     session_id: senderPhone,
                     phone: senderPhone,
-                    patient_name: message.notifyName || (message.sender && message.sender.pushname) || 'Patient'
+                    patient_name: message.notifyName || (message.sender && message.sender.pushname) || 'Patient',
+                    clinic_id: 'CLN-SURAT-07',
+                    clinic_name: 'geetrix solutions clinic'
                 });
 
                 console.log('Healthcare AI reply generated:', resp.data.message ? resp.data.message.substring(0, 60) + '...' : 'Done');
