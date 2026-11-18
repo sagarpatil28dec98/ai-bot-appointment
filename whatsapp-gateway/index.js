@@ -157,14 +157,16 @@ app.post('/api/simulate-chat', async (req, res) => {
     const patientName = patient_name || 'Patient';
 
     try {
-        const resp = await axios.post(FASTAPI_WEBHOOK, {
+        const payload = {
             message: message || 'Hi, need appointment in Surat',
             session_id: `wa_${senderPhone}`,
             phone: senderPhone,
-            patient_name: patientName,
-            clinic_id: clinic_id || 'CLN-SURAT-07',
-            clinic_name: clinic_name || 'geetrix solutions clinic'
-        });
+            patient_name: patientName
+        };
+        if (clinic_id) payload.clinic_id = clinic_id;
+        if (clinic_name) payload.clinic_name = clinic_name;
+
+        const resp = await axios.post(FASTAPI_WEBHOOK, payload);
         return res.json({
             success: true,
             phone: senderPhone,
@@ -241,13 +243,12 @@ function initWhatsAppClient() {
                 const senderPhone = (message.from || '').replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '');
                 
                 // Forward to active local Healthcare AI Assistant on port 8000
+                // Target clinic is dynamically determined by matching phone or active clinic
                 const resp = await axios.post(FASTAPI_WEBHOOK, {
                     message: message.body,
                     session_id: senderPhone,
                     phone: senderPhone,
-                    patient_name: message.notifyName || (message.sender && message.sender.pushname) || 'Patient',
-                    clinic_id: 'CLN-SURAT-07',
-                    clinic_name: 'geetrix solutions clinic'
+                    patient_name: message.notifyName || (message.sender && message.sender.pushname) || 'Patient'
                 });
 
                 console.log('Healthcare AI reply generated:', resp.data.message ? resp.data.message.substring(0, 60) + '...' : 'Done');

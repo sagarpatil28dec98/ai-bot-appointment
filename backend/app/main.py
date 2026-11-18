@@ -35,52 +35,6 @@ async def lifespan(app: FastAPI):
             db.add(admin_user)
             logger.info(f"Seeded default administrator: {settings.DEFAULT_ADMIN_EMAIL}")
 
-        doc_check = await db.execute(select(Doctor))
-        if not doc_check.scalars().first():
-            # Seed default doctors
-            doc1 = Doctor(
-                full_name="Sarah Jenkins",
-                email="dr.jenkins@clinic.com",
-                specialization="Cardiologist",
-                slot_duration_minutes=30,
-                buffer_time_minutes=5,
-                google_calendar_id="primary",
-                is_active=True
-            )
-            doc2 = Doctor(
-                full_name="David Chen",
-                email="dr.chen@clinic.com",
-                specialization="General Physician",
-                slot_duration_minutes=20,
-                buffer_time_minutes=5,
-                google_calendar_id="primary",
-                is_active=True
-            )
-            doc3 = Doctor(
-                full_name="Elena Rostova",
-                email="dr.rostova@clinic.com",
-                specialization="Dermatologist",
-                slot_duration_minutes=30,
-                buffer_time_minutes=5,
-                google_calendar_id="primary",
-                is_active=True
-            )
-            db.add_all([doc1, doc2, doc3])
-            await db.flush()
-
-            # Add schedules Monday - Friday 09:00 - 17:00
-            for doc in [doc1, doc2, doc3]:
-                for day in range(0, 6):  # Mon through Sat
-                    sched = DoctorSchedule(
-                        doctor_id=doc.id,
-                        day_of_week=day,
-                        start_time=time(9, 0),
-                        end_time=time(17, 0),
-                        is_active=True
-                    )
-                    db.add(sched)
-            logger.info("Seeded default clinic doctors and schedules")
-
         await db.commit()
 
     yield
