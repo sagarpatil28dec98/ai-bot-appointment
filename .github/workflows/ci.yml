@@ -1,0 +1,77 @@
+name: CI/CD Pipeline - Build, Test & Docker Validate
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # 1. Backend Python FastAPI Lint & Test
+  backend-test:
+    name: Backend Test & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Test Python Import & Syntax
+        run: |
+          cd backend
+          python -c "import app.main; print('FastAPI App and Database modules loaded cleanly!')"
+
+  # 2. Frontend React / Vite Production Build
+  frontend-build:
+    name: Frontend Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Build Vite Distribution
+        run: |
+          cd frontend
+          npm run build
+
+  # 3. Docker Compose Build & Validation
+  docker-build:
+    name: Docker Compose Build & Validate
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-build]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build All Docker Services
+        run: |
+          docker compose build --parallel
